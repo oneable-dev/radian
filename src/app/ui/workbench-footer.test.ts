@@ -102,7 +102,7 @@ test("Default screens use content through the footer without fixed legends or hi
     expect(panel.y + panel.height).toBe(footer.y);
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
     expect(app.captureCharFrame()).not.toContain("UI preview only");
-    expect(app.footerLine()).toContain("CODE");
+    expect(app.footerLine()).toContain("AGENT");
     expect(app.calls).toEqual([]);
   } finally {
     await app.close();
@@ -110,7 +110,7 @@ test("Default screens use content through the footer without fixed legends or hi
 });
 
 test.each([120, 60])(
-  "Width %i replaces the view badge with focused reader modes and restores CODE for prompts",
+  "Width %i replaces the view badge with focused reader modes and restores AGENT for prompts",
   async (width) => {
     // Legacy output and a retained draft exercise mode changes without exposing implementation labels.
     const app = await mount(undefined, {
@@ -125,7 +125,7 @@ test.each([120, 60])(
       app.resize(width, 24);
       pressLeader(app, "a");
       await app.renderOnce();
-      expect(app.badge()).toBe("CODE");
+      expect(app.badge()).toBe("AGENT");
 
       // Section navigation and body navigation share NORMAL, even while following is suspended.
       pressLeader(app, "[");
@@ -133,7 +133,7 @@ test.each([120, 60])(
       await app.renderOnce();
       expect(app.badge()).toBe("NORMAL");
       expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
-      expect(app.footerLine()).not.toMatch(/Paused|legacy preview|TEXT|CODE/u);
+      expect(app.footerLine()).not.toMatch(/Paused|legacy preview|TEXT|AGENT/u);
       app.mockInput.pressEnter();
       await app.renderOnce();
       expect(app.badge()).toBe("NORMAL");
@@ -155,7 +155,7 @@ test.each([120, 60])(
       expect(app.badge()).toBe("NORMAL");
       app.mockInput.pressEscape();
       await app.renderOnce();
-      expect(app.badge()).toBe("CODE");
+      expect(app.badge()).toBe("AGENT");
       expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
       expect(app.view.promptDrafts.a1).toBe("unsent draft");
       expect(app.calls).toEqual([]);
@@ -178,7 +178,7 @@ test("Popups keep view badges and restore the focused reader mode on dismissal",
     openWorkspaceSearch(app);
     await app.mockInput.typeText("radian");
     await app.renderOnce();
-    expect(app.badge()).toBe("CODE");
+    expect(app.badge()).toBe("AGENT");
     app.mockInput.pressEscape();
     await app.renderOnce();
     expect(app.badge()).toBe("VISUAL");
@@ -340,7 +340,7 @@ test("Compact hidden-panel layouts keep footer/notifications at bottom and click
     await app.mockMouse.click(2, 11);
     await app.renderOnce();
 
-    expect(app.footerLine()).toContain("CODE");
+    expect(app.footerLine()).toContain("AGENT");
     expect(app.footerLine()).not.toContain("0.0.0");
     expect(app.captureCharFrame()).toContain("Runtime reconnecting");
     expect(app.renderer.root.findDescendantById("app-footer")!.height).toBe(1);
@@ -400,7 +400,7 @@ test("Regular layout padding shrinks in compact screens and restores alongside d
     expect(transcript.x).toBe(2);
     expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(2);
-    expect(app.footerLine().indexOf("CODE")).toBe(1);
+    expect(app.footerLine().indexOf("AGENT")).toBe(1);
 
     // Shrinking the real renderer reduces insets rather than clipping the active input.
     pressLeader(app, "a");
@@ -411,7 +411,7 @@ test("Regular layout padding shrinks in compact screens and restores alongside d
     expect(transcript.x).toBe(1);
     expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(1);
-    expect(app.footerLine().indexOf("CODE")).toBe(1);
+    expect(app.footerLine().indexOf("AGENT")).toBe(1);
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 
     // The normal spacing returns without rebuilding the Agent or replacing its draft.
@@ -421,7 +421,7 @@ test("Regular layout padding shrinks in compact screens and restores alongside d
     expect(transcript.x).toBe(2);
     expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(2);
-    expect(app.footerLine().indexOf("CODE")).toBe(1);
+    expect(app.footerLine().indexOf("AGENT")).toBe(1);
     expect(app.view.promptDrafts.a1).toBe("keep this draft");
     expect(app.calls).toEqual([]);
   } finally {
@@ -457,7 +457,7 @@ test("Short terminals keep Agent status/input clear of single-row footers", asyn
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
-    expect(app.footerLine().trimStart()).toStartWith("CODE");
+    expect(app.footerLine().trimStart()).toStartWith("AGENT");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 
@@ -478,7 +478,7 @@ test("Blur and disposal leave neither stale shortcuts nor focus subscriptions", 
   try {
     app.renderer.currentFocusedRenderable?.blur();
     await app.renderOnce();
-    expect(app.footerLine()).toContain("CODE");
+    expect(app.footerLine()).toContain("AGENT");
     expect(app.footerLine()).toContain("Help");
     expect(app.footerLine()).not.toContain("Open worktree");
     app.view.dispose();

@@ -160,7 +160,7 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
     "workspace.dismiss": [key("escape", "workspace"), key("escape", "search")],
     "workspace.search": [key("/", "workspace")],
     "view.agent": [key("<leader> a")],
-    "view.chat": [key("<leader> q")],
+    "view.chat": [key("<leader> m")],
     "view.editor": [key("<leader> e")],
     "view.git": [key("<leader> g")],
     "view.terminal": [key("<leader> t")],

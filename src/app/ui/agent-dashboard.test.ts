@@ -193,7 +193,7 @@ test("Usage fills the work area at every size while the shared footer stays visi
 });
 
 test.each([
-  ["a", "CODE", "agent"],
+  ["a", "AGENT", "agent"],
   ["e", "EDITOR", "editor"],
   ["g", "GIT", "git"],
   ["t", "TERMINAL", "terminal"],

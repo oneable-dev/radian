@@ -68,13 +68,13 @@ test("Closing a session through the real service never emits shutdown progress n
             // Cursor-addressed repaint patches are not contiguous prose; inspect the actual terminal cells.
             screen.write(bytes, () => {
               const text = frame();
-              // First launch now opens CHAT; this regression explicitly exercises CODE.
+              // First launch opens CHAT; this regression explicitly exercises AGENT.
               if (!selectedCode && text.includes("CHAT")) {
                 selectedCode = true;
                 _terminal.write("\x00a");
               }
               if (
-                text.includes("CODE") &&
+                text.includes("AGENT") &&
                 text.includes("Ask to do anything") &&
                 text.includes("context")
               ) {

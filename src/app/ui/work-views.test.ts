@@ -5,6 +5,7 @@ import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { icons } from "../../icons.ts";
+import { CHAT_SCOPE_ID } from "../../agents/session-scope.ts";
 import { err, ok } from "../../result.ts";
 import { EditorError } from "../../errors.ts";
 import type { EditorActions } from "../../editor/ui/panel.ts";
@@ -136,7 +137,7 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
 
     const panel = app.renderer.root.findDescendantById("work-panel")!;
     for (const [key, label, id] of [
-      ["a", "CODE", "agent"],
+      ["a", "AGENT", "agent"],
       ["e", "Editor", "editor"],
       ["g", "Git", "git"],
       ["t", "Terminal", "terminal"],
@@ -410,6 +411,43 @@ test("Focused Editor forwards Neovim keys and leader+b opens workspace navigatio
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
     expect(editor.inputs.join("")).not.toContain("\x00");
     expect(editor.opens).toEqual([]); // Existing editor metadata requires attachment, not another open.
+  } finally {
+    await app.close();
+  }
+});
+
+test("Focused Editor opens CHAT without forwarding its shortcut to Neovim", async () => {
+  // CHAT navigation must remain app-owned while the embedded editor owns ordinary input.
+  const editor = editorFixture();
+  const app = await mount({
+    editor: editor.actions,
+    getChat: () => ({
+      id: CHAT_SCOPE_ID,
+      path: "/tmp",
+      name: "CHAT",
+      sessions: [],
+      details: {},
+      historyRevision: 0,
+      accountsRevision: 0,
+      closingCount: 0,
+    }),
+  });
+  try {
+    await app.showView("e");
+    await app.visible("Editor buffer");
+    const inputs = [...editor.inputs];
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
+
+    // The global CHAT command changes views without sending its prefix or letter to the PTY.
+    app.leader("m");
+    await app.renderOnce();
+    await app.renderOnce();
+
+    expect(app.view.currentView).toBe("chat");
+    expect(app.captureCharFrame().split("\n")[23]?.trimStart()).toStartWith("CHAT");
+    expect(editor.inputs).toEqual(inputs);
+    expect(editor.opens).toEqual([]);
+    expect(app.requests).toEqual([]);
   } finally {
     await app.close();
   }

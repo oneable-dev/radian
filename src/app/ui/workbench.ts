@@ -899,7 +899,7 @@ export class Workbench {
         this.appView === "chat"
           ? "CHAT"
           : tree
-            ? `${this.displayedWorkView === "agent" ? "CODE" : this.displayedWorkView.toUpperCase()} / ${tree.name}`
+            ? `${this.displayedWorkView.toUpperCase()} / ${tree.name}`
             : "Radian",
       ...options,
     });
@@ -1096,9 +1096,7 @@ export class Workbench {
       ? "USAGE"
       : this.appView === "chat"
         ? "CHAT"
-        : this.displayedWorkView === "agent"
-          ? "CODE"
-          : this.displayedWorkView.toUpperCase();
+        : this.displayedWorkView.toUpperCase();
     let outputStatus = "";
     if (!overlay) {
       if (this.agent.active) {

@@ -542,7 +542,7 @@ export class ChatRuntime {
         return err(
           new InputError(
             id
-              ? "Session belongs to CODE or command is not available in CHAT."
+              ? "Session belongs to AGENT or command is not available in CHAT."
               : "Unsupported CHAT command.",
           ),
         );

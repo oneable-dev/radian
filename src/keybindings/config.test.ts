@@ -286,8 +286,23 @@ test("View letters and internal tab numbers/creation keys can be independently r
   expect(map.hint("tab.new", "terminal")).toBe("");
   expect(map.hint("view.editor", "terminal")).toBe("<leader>v");
   expect(map.hint("view.terminal", "editor")).toBe("<leader>t");
-  expect(map.hint("view.chat", "prompt")).toBe("<leader>q");
+  expect(map.hint("view.chat", "prompt")).toBe("<leader>m");
+  expect(map.hint("view.chat", "editor")).toBe("<leader>m");
+  expect(map.hint("view.chat", "terminal")).toBe("<leader>m");
+  expect(map.bindings.some((binding) => binding.keys.join(" ") === "ctrl+b q")).toBe(false);
   expect(map.hint("terminal.new", "terminal")).toBe("");
+});
+
+test("CHAT keeps explicit legacy shortcuts and supports disabling its direct view command", () => {
+  // Existing user mappings remain valid when the default CHAT letter changes.
+  const legacy = expectOk(parseKeymap({ bindings: { "view.chat": ["<leader> q"] } }));
+  const disabled = expectOk(parseKeymap({ bindings: { "view.chat": [] } }));
+
+  // CHAT is still a direct view command, independent of the shared creation command.
+  expect(legacy.hint("view.chat", "prompt")).toBe("<leader>q");
+  expect(legacy.hint("tab.new", "prompt")).toBe("<leader>c");
+  expect(disabled.hint("view.chat", "terminal")).toBe("");
+  expect(disabled.hint("view.agent", "terminal")).toBe("<leader>a");
 });
 
 test("Enter routes through completion-aware submission while Tab routes only through insertion", () => {

@@ -301,7 +301,7 @@ test("Notifications leave footer height stable and Messages reads/copies untrunc
     expect(app.renderer.root.findDescendantById("footer-notice")).toBeUndefined();
     expect(app.captureCharFrame()).toContain("Temporary connection");
     expect(app.captureCharFrame()).not.toContain("Detailed cause.");
-    expect(app.captureCharFrame()).toContain("CODE / radian");
+    expect(app.captureCharFrame()).toContain("AGENT / radian");
     pressLeader(app, "!");
     app.mockInput.pressEnter();
     app.mockInput.pressKey("y");

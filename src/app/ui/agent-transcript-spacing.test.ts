@@ -434,7 +434,7 @@ test.each(sections)(
           expect(app.captureCharFrame()).toContain(section.text);
         }
 
-        expect(app.captureCharFrame().split("\n")[height - 1]).toContain("CODE");
+        expect(app.captureCharFrame().split("\n")[height - 1]).toContain("AGENT");
         expect(app.view.promptDrafts.a1).toBe("Keep my draft");
       }
 

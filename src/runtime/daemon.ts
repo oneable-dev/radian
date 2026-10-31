@@ -492,7 +492,7 @@ class SharedDaemon {
       ) {
         return rejected(
           new InputError(
-            "The shared endpoint only accepts CHAT commands; CODE commands require their repository endpoint.",
+            "The shared endpoint only accepts CHAT commands; workspace commands require their repository endpoint.",
           ),
         );
       }

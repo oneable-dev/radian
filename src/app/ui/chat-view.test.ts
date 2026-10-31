@@ -10,6 +10,8 @@ import { filterCatalog } from "../../agents/completion.ts";
 import { PromptInput } from "../../ui/prompt-input.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { ok } from "../../result.ts";
+import { parseKeymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
@@ -111,22 +113,25 @@ async function mount(options: Partial<WorkbenchActions> = {}, repositories = dem
   };
 }
 
-test("CHAT shows one conversation without a session strip and CODE restores its session tabs", async () => {
-  // CHAT is selected independently of the worktree's CODE tab and has no tab chrome.
+test("CHAT shows one conversation without a session strip and AGENT restores its session tabs", async () => {
+  // CHAT is selected independently of the worktree's AGENT tab and has no tab chrome.
   const app = await mount();
   try {
     expect(app.view.currentView).toBe("chat");
     expect(app.view.chatSessionId).toBe("chat-1");
     expect(app.renderer.root.findDescendantById("agent-session-tabs")!.visible).toBe(false);
     expect(app.captureCharFrame()).toContain("CHAT");
+    expect(app.captureCharFrame().split("\n")[26]).toContain("<leader>b Workspace");
+    expect(app.renderer.root.findDescendantById("footer-workspace")!.visible).toBe(false);
 
-    // A CODE view remains selectable without changing CHAT's remembered conversation.
+    // An AGENT view remains selectable without changing CHAT's remembered conversation.
     app.leader("a");
     await app.render();
     expect(app.view.currentView).toBe("agent");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.renderer.root.findDescendantById("agent-session-tabs")!.visible).toBe(true);
-    app.leader("q");
+    expect(app.captureCharFrame().split("\n")[26]?.trimStart()).toStartWith("AGENT");
+    app.leader("m");
     await app.render();
     expect(app.view.currentView).toBe("chat");
     expect(app.view.chatSessionId).toBe("chat-1");
@@ -136,8 +141,63 @@ test("CHAT shows one conversation without a session strip and CODE restores its 
   }
 });
 
+test.each([
+  ["a", "agent"],
+  ["e", "editor"],
+  ["g", "git"],
+  ["t", "terminal"],
+] as const)("CHAT shortcut returns directly from %s and never toggles back", async (key, view) => {
+  // Every project view must return to the same app-scoped conversation and draft.
+  const app = await mount();
+  try {
+    const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
+    await app.mockInput.typeText("message draft");
+    app.leader(key);
+    await app.render();
+    expect(app.view.currentView).toBe(view);
+
+    // Repeating the CHAT command is idempotent, not a mode toggle or literal input.
+    app.leader("m");
+    await app.render();
+    app.leader("m");
+    await app.render();
+
+    expect(app.view.currentView).toBe("chat");
+    expect(app.view.chatSessionId).toBe("chat-1");
+    expect(input.value).toBe("message draft");
+    expect(app.views).toEqual([view, "chat"]);
+    expect(app.selection.worktree?.id).toBe("demo:main");
+    expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
+  } finally {
+    await app.close();
+  }
+});
+
+test("Explicit legacy CHAT shortcuts keep direct navigation after the default changes", async () => {
+  // User mappings keep the same view.chat command even when its default becomes m.
+  const keymap = expectOk(parseKeymap({ bindings: { "view.chat": ["<leader> q"] } }));
+  const app = await mount({ keymap });
+  try {
+    app.leader("a");
+    await app.render();
+
+    // The configured legacy key selects CHAT once and remains idempotent afterwards.
+    app.leader("q");
+    await app.render();
+    app.leader("q");
+    await app.render();
+
+    expect(app.view.currentView).toBe("chat");
+    expect(app.view.chatSessionId).toBe("chat-1");
+    expect(app.views).toEqual(["agent", "chat"]);
+    expect(keymap.hint("view.chat", "prompt")).toBe("<leader>q");
+  } finally {
+    await app.close();
+  }
+});
+
 test("CHAT remains usable without any repository or selected worktree", async () => {
-  // CHAT must not inherit CODE's repository prerequisite for prompting or browsing.
+  // CHAT must not inherit AGENT's repository prerequisite for prompting or browsing.
   const app = await mount({}, []);
   try {
     expect(app.selection.worktree).toBeNull();
@@ -152,7 +212,7 @@ test("CHAT remains usable without any repository or selected worktree", async ()
   }
 });
 
-test("CHAT and CODE preserve separate composer caret, attachments and scroll when views switch", async () => {
+test("CHAT and AGENT preserve separate composer caret, attachments and scroll when views switch", async () => {
   // Switching the shared renderer must save each session's input state without changing the running executor.
   const app = await mount();
   try {
@@ -169,15 +229,15 @@ test("CHAT and CODE preserve separate composer caret, attachments and scroll whe
 
     app.leader("a");
     await app.render();
-    input.value = "CODE draft";
+    input.value = "AGENT draft";
     input.cursorOffset = 2;
     await app.render();
-    app.leader("q");
+    app.leader("m");
     await app.render();
 
     expect(input.draft).toEqual(chatDraft);
     expect(scroll.scrollTop).toBe(chatScroll);
-    expect(app.view.promptInputDrafts.a1?.value).toBe("CODE draft");
+    expect(app.view.promptInputDrafts.a1?.value).toBe("AGENT draft");
     expect(app.view.promptInputDrafts.a1?.cursor).toBe(2);
     expect(app.selection.sessionId).toBe("a1");
   } finally {
@@ -317,7 +377,7 @@ test("CHAT treats @ literally without claiming Tab or Esc while commands and ski
 });
 
 test("Session monitor can open running CHAT work without a workspace lookup", async () => {
-  // Monitoring is global even when CODE is displayed, and CHAT remains a workspace-free scope.
+  // Monitoring is global even when AGENT is displayed, and CHAT remains a workspace-free scope.
   const app = await mount();
   try {
     app.leader("a");
@@ -339,7 +399,7 @@ test("Session monitor can open running CHAT work without a workspace lookup", as
 });
 
 test("Opening a CHAT completion notification selects its conversation without a worktree", async () => {
-  // Notifications may arrive while CODE is displayed; only explicit activation switches the app view.
+  // Notifications may arrive while AGENT is displayed; only explicit activation switches the app view.
   const app = await mount();
   try {
     app.leader("a");
@@ -367,7 +427,7 @@ test("Opening a CHAT completion notification selects its conversation without a 
   }
 });
 
-test("Changing worktrees restores the actual work view and lets new CODE sessions take focus", async () => {
+test("Changing worktrees restores the actual work view and lets new AGENT sessions take focus", async () => {
   // Worktree-local pane state must agree with app navigation after leaving an Editor worktree.
   let scope: string | undefined;
   let created: ((id: string) => void) | undefined;
@@ -415,10 +475,15 @@ test("Changing worktrees restores the actual work view and lets new CODE session
   }
 });
 
-test("Explicit workspace activation from CHAT opens its remembered work view", async () => {
-  // Workspace selection is an explicit navigation action, not an invisible update behind CHAT.
+test("Workspace activation preserves the app-scoped CHAT conversation and draft", async () => {
+  // Workspaces share CHAT, while each keeps its own project-view selection.
   const app = await mount();
   try {
+    const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
+    input.value = "Shared CHAT draft";
+    input.cursorOffset = 5;
+    await app.render();
+
     app.leader("b");
     await app.render();
     app.mockInput.pressKey("n", { ctrl: true });
@@ -429,12 +494,23 @@ test("Explicit workspace activation from CHAT opens its remembered work view", a
     expect(app.selection.worktree?.id).toBe("demo:feature");
     expect(app.view.currentView).toBe("agent");
     expect(app.view.chatSessionId).toBe("chat-1");
+
+    // Returning from another workspace must not create a workspace-specific CHAT.
+    app.leader("m");
+    await app.render();
+
+    expect(app.view.currentView).toBe("chat");
+    expect(app.view.chatSessionId).toBe("chat-1");
+    expect(input.value).toBe("Shared CHAT draft");
+    expect(input.cursorOffset).toBe(5);
+    expect(app.selection.worktree?.id).toBe("demo:feature");
+    expect(app.renderer.root.findDescendantById("footer-workspace")!.visible).toBe(false);
   } finally {
     await app.close();
   }
 });
 
-test("CHAT creation uses the canonical scope and cannot claim focus after switching to CODE", async () => {
+test("CHAT creation uses the canonical scope and cannot claim focus after switching to AGENT", async () => {
   // The request is accepted asynchronously while the user explicitly changes views.
   let done: ((id: string) => void) | undefined;
   const app = await mount({
@@ -454,11 +530,11 @@ test("CHAT creation uses the canonical scope and cannot claim focus after switch
     expect(app.selection.sessionId).toBe("a1");
 
     // Returning to the same CHAT input does not revive an older creation's focus claim.
-    app.leader("q");
+    app.leader("m");
     await app.render();
     app.leader("c");
     app.leader("a");
-    app.leader("q");
+    app.leader("m");
     await app.render();
     done?.("chat-2");
     await app.render();
