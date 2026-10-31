@@ -369,7 +369,7 @@ export class Footer {
       const hidden = providers.length - count;
       const suffix = hidden ? `+${hidden}` : "";
       for (const format of ["full", "ratios", "icons"] as const) {
-        for (const barWidth of format === "full" ? [6, 4, 2, 0] : [0]) {
+        for (const barWidth of format === "full" ? [8, 6, 4, 2, 0] : [0]) {
           for (const countdown of [true, false]) {
             const meters = shown.map(({ view, window, label }) => {
               const reset = countdown && !view.recovering ? resetTime(window?.resetsAt, now) : "";

@@ -266,6 +266,42 @@ test("Provider usage replaces shortcut hints and stays right-aligned independent
   }
 });
 
+test("Provider bars use eight cells when space permits and restore after compact layouts", async () => {
+  // Different usage ratios change fill colors, not the full bar length shared with session context.
+  const app = await mount(160);
+  const now = Date.now();
+  try {
+    app.footer.setUsage(
+      {
+        openai: usage("openai", 78, now + 89 * 3600000),
+        anthropic: usage("anthropic", 0, now + 68 * 3600000),
+      },
+      ["openai", "anthropic"],
+    );
+
+    // A narrow footer may shorten meters, but widening it must restore both full-length bars.
+    for (const width of [160, 40, 160]) {
+      app.resize(width, 8);
+      await app.renderOnce();
+
+      // Both ratios remain readable while only roomy layouts reserve eight cells per provider.
+      expect(app.line()).toContain("78%");
+      expect(app.line()).toContain("0%");
+      expect(Bun.stringWidth(app.line())).toBeLessThanOrEqual(width);
+      const bars = app.line().match(/▉+/gu) ?? [];
+      if (width === 160) {
+        expect(bars).toEqual(["▉▉▉▉▉▉▉▉", "▉▉▉▉▉▉▉▉"]);
+        expect(app.line()).toContain("78% used 3d 17h");
+        expect(app.line()).toContain("0% used 2d 20h");
+      } else {
+        expect(bars.join("").length).toBeLessThan(16);
+      }
+    }
+  } finally {
+    await app.dispose();
+  }
+});
+
 test("Narrow footers drop reset times before provider percentages and restore after resizing", async () => {
   // Multiple connections must remain identifiable without making the footer taller.
   const app = await mount(160);
