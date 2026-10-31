@@ -103,6 +103,7 @@ test.each(["glyph", "kitty", "sixel"] as const)(
               ? {
                   "footer.identity": { bg: "#29465B" },
                   "branding.provider": { bg: "#9F2E3A", fg: "#DDEEFF" },
+                  "branding.claude": { fg: "#F08866" },
                 }
               : {},
           });
@@ -124,10 +125,27 @@ test.each(["glyph", "kitty", "sixel"] as const)(
               })!;
               expect(span.bg.toInts()).toEqual(expected);
             }
+            const foreground: [number, number, number, number] =
+              provider === "anthropic"
+                ? custom
+                  ? [240, 136, 102, 255]
+                  : [217, 119, 87, 255]
+                : theme.styles["branding.provider"].fg.toInts();
             if (protocol !== "glyph") {
               const pixels = paints.get(icon.x)!;
               expect(pixels).toBeDefined();
               expect(Array.from(pixels.slice(0, 4))).toEqual(expected);
+              expect(
+                pixels.some(
+                  (_, index) =>
+                    index % 4 === 0 &&
+                    foreground.every((channel, offset) => pixels[index + offset] === channel),
+                ),
+              ).toBe(true);
+            } else {
+              const glyph = provider === "anthropic" ? icons.claude : icons.openai;
+              const span = frame.lines[icon.y]!.spans.find((span) => span.text.includes(glyph))!;
+              expect(span.fg.toInts()).toEqual(foreground);
             }
           }
           if (protocol === "glyph") {
@@ -162,6 +180,22 @@ test("Ordinary terminals reserve two cells and draw bold Nerd Font logos instead
     app.icon.setProvider("anthropic");
     await app.renderOnce();
     expect(app.captureCharFrame().split("\n")[2]).toContain(icons.claude);
+    expect(
+      app
+        .captureSpans()
+        .lines[2]!.spans.find((span) => span.text.includes(icons.claude))!
+        .fg.toInts(),
+    ).toEqual([217, 119, 87, 255]);
+
+    // Reusing the icon for another provider must restore its ordinary themed foreground.
+    app.icon.setProvider("openai");
+    await app.renderOnce();
+    expect(
+      app
+        .captureSpans()
+        .lines[2]!.spans.find((span) => span.text.includes(icons.openai))!
+        .fg.toInts(),
+    ).toEqual(uiTheme(app.renderer).styles["branding.provider"].fg.toInts());
     expect(app.icon.setProvider("unsupported")).toBe(false);
     expect(app.icon.visible).toBe(false);
   } finally {

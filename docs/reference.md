@@ -1078,8 +1078,10 @@ closing completion restores its position. Narrow session panels shorten bars and
 dropping context values. The footer shortens account meters and omits reset countdowns as space shrinks.
 Theme changes preserve the current draft and focus.
 
-Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
-OpenTUI renders a font-derived, theme-tinted image with approximately 1.5x the ordinary glyph width,
+Provider logos reserve two columns. Claude uses terracotta orange (`#D97757`), configurable through
+`branding.claude`; other providers retain `branding.provider`. Footer logos keep the footer background.
+On terminals reporting Kitty/Sixel graphics and pixel resolution, OpenTUI renders a font-derived,
+theme-tinted image with approximately 1.5x the ordinary glyph width,
 within the same row. Explicitly tinted popup backdrops change the logo's colors without changing its image size;
 model, effort, fast and context symbols retain their ordinary font scale. Other terminals retain a
 bold Nerd Font glyph; individual character scaling is not assumed. No terminal font settings are changed. Asset attribution is in

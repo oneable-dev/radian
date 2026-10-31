@@ -81,6 +81,7 @@ export const styleGroups = [
   "prompt.input",
   "prompt.attachment",
   "branding.provider",
+  "branding.claude",
   "branding.logo",
   "diff.added",
   "diff.removed",

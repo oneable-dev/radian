@@ -39,14 +39,13 @@ function imageOperation<T>(operation: () => T): Result<T, ImageError> {
 export class ProviderIcon extends Renderable {
   private name: ProviderIconName | null = null;
   private glyph = "";
-  private style: UiStyle;
   private image: NativeImage | null = null;
   private imageSignature = "";
   private failed = false;
 
   constructor(
     private readonly renderer: CliRenderer,
-    backgroundStyle: StyleGroup = "branding.provider",
+    private readonly backgroundStyle: StyleGroup = "branding.provider",
   ) {
     super(renderer, {
       id: "usage-provider-icon",
@@ -58,12 +57,7 @@ export class ProviderIcon extends Renderable {
       visible: false,
     });
     this.selectable = false;
-    const theme = uiTheme(renderer);
-    this.style = { ...theme.styles["branding.provider"], bg: theme.styles[backgroundStyle].bg };
-    theme.bindStyles(this, (styles) => {
-      this.style = { ...styles["branding.provider"], bg: styles[backgroundStyle].bg };
-      this.requestRender();
-    });
+    uiTheme(renderer).bindStyles(this, () => this.requestRender());
     renderer.on("capabilities", this.retryGraphics);
     renderer.on("resize", this.retryGraphics);
     renderer.addPostProcessFn(this.paintImage);
@@ -88,6 +82,14 @@ export class ProviderIcon extends Renderable {
     }
 
     return next !== null;
+  }
+
+  private get style(): UiStyle {
+    const styles = uiTheme(this.renderer).styles;
+    return {
+      ...styles[this.name === "claude" ? "branding.claude" : "branding.provider"],
+      bg: styles[this.backgroundStyle].bg,
+    };
   }
 
   private retryGraphics = (): void => {

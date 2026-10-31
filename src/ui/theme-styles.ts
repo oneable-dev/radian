@@ -104,6 +104,7 @@ const definitions = {
   "sidebar.branch": (c: UiColors) => style(c.muted),
   "prompt.input": (c: UiColors) => style(c.text, c.surface),
   "branding.provider": (c: UiColors) => style(c.text, c.panel, bold),
+  "branding.claude": (c: UiColors) => style(RGBA.fromHex("#D97757"), c.panel, bold),
   "branding.logo": (c: UiColors) => style(blendColors(c.panel, c.muted, 0.4)),
   "prompt.attachment": (c: UiColors) => style(c.accent, c.selected),
   "diff.added": (c: UiColors) => style(c.success, c.added),
