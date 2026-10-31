@@ -32,8 +32,8 @@ import {
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { privateDirectory } from "../runtime/storage.ts";
-import { UsageMonitor } from "../usage/monitor.ts";
-import { openAiUsageResolver } from "../usage/providers/openai.ts";
+import { createUsageCache, UsageMonitor } from "../usage/monitor.ts";
+import { providerUsageResolver } from "../usage/providers/index.ts";
 import type {
   AccountInfo,
   AccountReply,
@@ -118,6 +118,7 @@ type Options = {
   offline?: boolean;
   defaultCredentials?: CredentialStore;
   providers?: readonly Provider[];
+  usageFetch?: (url: string, options: RequestInit) => Promise<Response>;
 };
 
 // One daemon-owned authority. Workspace SDK stores are views, never token copies.
@@ -135,6 +136,8 @@ export class AccountManager {
   private readonly modelRevisions = new Map<string, number>();
   private readonly logins = new Map<string, Login>();
   private readonly listeners = new Set<() => void>();
+  private existingProviders = new Set<string>();
+  private readonly usageCache = createUsageCache();
 
   get revision(): number {
     return this.state.revision;
@@ -253,7 +256,18 @@ export class AccountManager {
       );
     });
     if (saved.ok) {
+      const previousIds = new Set(this.state.accounts.map((account) => account.id));
+      const nextIds = new Set(next.accounts.map((account) => account.id));
+      const changedProviders = new Set([
+        ...this.state.accounts
+          .filter((account) => !nextIds.has(account.id))
+          .map((account) => account.provider),
+        ...next.accounts
+          .filter((account) => !previousIds.has(account.id))
+          .map((account) => account.provider),
+      ]);
       this.state = next;
+      this.updateUsageProviders(undefined, changedProviders);
       this.deviceIdPersisted = true;
       this.persistenceWarning = "";
       if (publish) {
@@ -351,6 +365,7 @@ export class AccountManager {
       result.ok && result.value ? [result.value] : [],
     );
     const incomplete = connections.some((result) => !result.ok);
+    this.updateUsageProviders(existingAccounts);
 
     return {
       revision: this.state.revision,
@@ -591,10 +606,85 @@ export class AccountManager {
       runtime.registerNativeProvider(provider);
     }
 
-    const usage = new UsageMonitor(openAiUsageResolver(runtime));
+    // Availability checks do not resolve or refresh credentials. Quota lookups remain runtime-owned.
+    const connections = await Promise.all(
+      this.defaults.getProviders().map((provider) => this.existingAccount(provider)),
+    );
+    this.updateUsageProviders(
+      connections.flatMap((result) => (result.ok && result.value ? [result.value] : [])),
+    );
+    const resolve = providerUsageResolver(runtime, this.options.usageFetch);
+    const usage = new UsageMonitor(
+      async (provider, signal) => {
+        const selections = { ...this.state.selections[worktreeId] };
+        // An unselected saved connection can be inspected without becoming request authentication.
+        if (!selections[provider] && !this.existingProviders.has(provider)) {
+          const account = this.state.accounts.find((account) => account.provider === provider);
+          if (account) {
+            selections[provider] = account.id;
+          }
+        }
+
+        const result = await scope.run(selections, () => resolve(provider, signal));
+        const accountId = selections[provider];
+        if (!result.ok || !result.value || provider !== "anthropic" || !accountId) {
+          return result;
+        }
+
+        // Opaque OAuth access tokens rotate. Keep the same named account's quota cache and cooldown.
+        const key = createHash("sha256").update(`anthropic\0account\0${accountId}`).digest("hex");
+
+        return ok({ ...result.value, key });
+      },
+      undefined,
+      undefined,
+      this.usageCache,
+    );
+    usage.setProviders([
+      ...this.existingProviders,
+      ...this.state.accounts.map((account) => account.provider),
+    ]);
     usage.setActive(this.active);
 
     return { runtime, usage, scope, catalogs, listeners: new Set() };
+  }
+
+  private updateUsageProviders(
+    connections?: readonly { readonly provider: string }[],
+    invalidate: ReadonlySet<string> = new Set(),
+  ): void {
+    const changedDefaults = new Set<string>();
+    if (connections) {
+      const next = new Set(connections.map(({ provider }) => provider));
+      for (const provider of new Set([...this.existingProviders, ...next])) {
+        if (this.existingProviders.has(provider) !== next.has(provider)) {
+          changedDefaults.add(provider);
+        }
+      }
+      this.existingProviders = next;
+    }
+    for (const [worktreeId, pending] of this.workspaces) {
+      void pending
+        .then((view) => {
+          if (this.stopped) {
+            return;
+          }
+          view.usage.setProviders([
+            ...this.existingProviders,
+            ...this.state.accounts.map((account) => account.provider),
+          ]);
+          const changed = new Set(invalidate);
+          for (const provider of changedDefaults) {
+            if (!this.selection(worktreeId, provider)) {
+              changed.add(provider);
+            }
+          }
+          for (const provider of changed) {
+            view.usage.invalidate(provider);
+          }
+        })
+        .catch((error) => reportUnexpected(error, "connected account usage update"));
+    }
   }
 
   setActive(active: boolean, owner = "app"): void {
@@ -615,7 +705,12 @@ export class AccountManager {
 
   private notifyCredential(id: string, provider: string): void {
     for (const [worktreeId, pending] of this.workspaces) {
-      if (this.selection(worktreeId, provider) === id) {
+      const selected = this.selection(worktreeId, provider);
+      const fallback =
+        !selected && !this.existingProviders.has(provider)
+          ? this.state.accounts.find((account) => account.provider === provider)?.id
+          : undefined;
+      if (selected === id || fallback === id) {
         void pending
           .then((view) => {
             view.usage.invalidate(provider);
@@ -880,7 +975,7 @@ export class AccountManager {
         }
 
         const state = structuredClone(this.state);
-        state.accounts = state.accounts.filter((account) => account.id !== account.id);
+        state.accounts = state.accounts.filter((account) => account.id !== request.accountId);
         state.revision++;
 
         return this.commit(state);
@@ -1278,6 +1373,7 @@ export class AccountManager {
 
     await Promise.all(views.flatMap((view) => (view.modelsTask ? [view.modelsTask.ready] : [])));
     await Promise.all(views.map((view) => view.usage.stop()));
+    this.usageCache.clear();
     await this.saving;
 
     return this.persistenceWarning ? this.commit(this.state) : ok(undefined);

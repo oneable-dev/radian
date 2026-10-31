@@ -150,6 +150,7 @@ const telemetry = Type.Object({
   effort: nullableText,
   fast: Type.Union([Type.Boolean(), Type.Null()]),
   usage: Type.Optional(usage),
+  providerUsage: Type.Optional(Type.Record(Type.String(), usage)),
   context: Type.Union([
     Type.Object({
       usedTokens: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),

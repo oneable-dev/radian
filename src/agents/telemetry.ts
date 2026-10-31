@@ -10,6 +10,7 @@ export type SessionTelemetry = {
   readonly context: { readonly usedTokens: number | null; readonly maxTokens: number } | null;
   readonly weekly: WeeklyQuota | null;
   readonly usage?: ProviderUsage;
+  readonly providerUsage?: Readonly<Record<string, ProviderUsage>>;
 };
 
 export type WeeklyQuota = {

@@ -3,6 +3,7 @@ import { err, type Result } from "../result.ts";
 import type {
   ProviderUsage,
   UsageAccount,
+  UsageGroupSubscription,
   UsageRefreshMode,
   UsageResolver,
   UsageSubscription,
@@ -39,19 +40,34 @@ type RefreshMode = "cached" | UsageRefreshMode;
 
 type RetryState = { failures: number; retryAt: number; retryAfterAt: number };
 
+// Explicit reloads bypass our backoff, never a server-imposed Retry-After deadline.
+const retryDeadline = (retry: RetryState | undefined, mode: RefreshMode): number =>
+  (mode === "manual" ? retry?.retryAfterAt : retry?.retryAt) ?? 0;
+
 type AccountCache = {
   snapshot: ProviderUsage;
   attemptedAt: number;
+  minRefreshMs: number;
   retry?: RetryState;
-  pending?: Promise<ProviderUsage>;
+  pending?: Promise<Result<ProviderUsage, ExpectedError>>;
 };
 
-// One runtime owns polling and account-keyed deduplication; UI instances only consume snapshots.
+export type UsageCache = Map<string, AccountCache>;
+
+// The owner clears a shared cache only after all of its monitors have stopped.
+export function createUsageCache(): UsageCache {
+  return new Map();
+}
+
+// Each runtime owns polling and subscriptions; account-keyed usage may be shared across runtimes.
 export class UsageMonitor {
   private readonly watchers = new Map<string, Set<() => void>>();
+  private readonly groups = new Set<() => void>();
+  private providers = new Set<string>();
   private readonly snapshots = new Map<string, ProviderUsage>();
   private readonly accountKeys = new Map<string, string>();
-  private readonly accounts = new Map<string, AccountCache>();
+  private readonly accounts: UsageCache;
+  private readonly ownsCache: boolean;
   private readonly pending = new Map<string, Promise<void>>();
   private readonly jobs = new Set<Promise<void>>();
   private readonly generations = new Map<string, number>();
@@ -66,18 +82,27 @@ export class UsageMonitor {
     private readonly resolve: UsageResolver,
     private readonly clock: Clock = systemClock,
     private readonly random: () => number = Math.random,
-  ) {}
+    cache?: UsageCache,
+  ) {
+    this.accounts = cache ?? createUsageCache();
+    this.ownsCache = cache === undefined;
+  }
 
   watch(changed: () => void): UsageSubscription {
     let provider: string | null = null;
     let disposed = false;
+    const notify = () => {
+      if (!disposed) {
+        changed();
+      }
+    };
     const remove = () => {
       if (provider === null) {
         return;
       }
 
       const callbacks = this.watchers.get(provider);
-      callbacks?.delete(changed);
+      callbacks?.delete(notify);
       if (!callbacks?.size) {
         this.watchers.delete(provider);
         this.snapshots.delete(provider);
@@ -98,7 +123,7 @@ export class UsageMonitor {
           provider = next;
           if (provider !== null) {
             const callbacks = this.watchers.get(provider) ?? new Set();
-            callbacks.add(changed);
+            callbacks.add(notify);
             this.watchers.set(provider, callbacks);
             void this.refresh(provider);
           }
@@ -121,6 +146,87 @@ export class UsageMonitor {
         disposed = true;
         remove();
         this.schedule();
+      },
+    };
+  }
+
+  setProviders(providers: readonly string[]): void {
+    if (this.stopped) {
+      return;
+    }
+
+    const next = new Set(providers);
+    if (next.size === this.providers.size && [...next].every((name) => this.providers.has(name))) {
+      return;
+    }
+
+    this.providers = next;
+    // Discovery callbacks may dispose groups or register new consumers.
+    const groups = [...this.groups];
+    for (const update of groups) {
+      update();
+    }
+  }
+
+  watchAll(changed: () => void): UsageGroupSubscription {
+    const subscriptions = new Map<string, UsageSubscription>();
+    let disposed = false;
+    const synchronize = () => {
+      for (const [provider, subscription] of subscriptions) {
+        if (!this.providers.has(provider)) {
+          subscription.dispose();
+          subscriptions.delete(provider);
+        }
+      }
+      for (const provider of this.providers) {
+        if (!subscriptions.has(provider)) {
+          const subscription = this.watch(changed);
+          subscriptions.set(provider, subscription);
+          subscription.read(provider);
+        }
+      }
+    };
+    const update = () => {
+      if (!disposed) {
+        synchronize();
+        changed();
+      }
+    };
+
+    return {
+      read: () => {
+        if (disposed || this.stopped) {
+          return {};
+        }
+
+        this.groups.add(update);
+        synchronize();
+
+        return Object.fromEntries(
+          [...subscriptions].map(([provider, subscription]) => [
+            provider,
+            subscription.read(provider),
+          ]),
+        );
+      },
+      refresh: (mode = "automatic") => {
+        if (!disposed) {
+          for (const subscription of subscriptions.values()) {
+            subscription.refresh(mode);
+          }
+        }
+      },
+      dispose: () => {
+        if (disposed) {
+          return;
+        }
+
+        disposed = true;
+        this.groups.delete(update);
+        for (const subscription of subscriptions.values()) {
+          subscription.dispose();
+        }
+        subscriptions.clear();
       },
     };
   }
@@ -161,12 +267,28 @@ export class UsageMonitor {
     if (existing) {
       return existing;
     }
-    if (this.clock.now() < this.retryAt(provider, mode)) {
-      return Promise.resolve();
+    const key = this.accountKeys.get(provider);
+    const account = key === undefined ? undefined : this.accounts.get(key);
+    const minRefreshAt =
+      account && !account.pending ? account.attemptedAt + account.minRefreshMs : 0;
+    const generation = this.generations.get(provider) ?? 0;
+    if (this.clock.now() < Math.max(minRefreshAt, this.retryAt(provider, mode))) {
+      // Another monitor may have refreshed the shared account during our cooldown.
+      return Promise.resolve().then(() => {
+        if (
+          !this.stopped &&
+          (this.generations.get(provider) ?? 0) === generation &&
+          account &&
+          !account.pending &&
+          account.snapshot.status !== "loading" &&
+          this.clock.now() >= retryDeadline(this.providerRetries.get(provider), mode)
+        ) {
+          this.publish(provider, account.snapshot);
+        }
+      });
     }
 
     // Defer callbacks until registration/reading a snapshot has finished, avoiding recursive publication.
-    const generation = this.generations.get(provider) ?? 0;
     const task = Promise.resolve()
       .then(() => this.perform(provider, mode, generation))
       .catch((error: unknown) => {
@@ -275,21 +397,34 @@ export class UsageMonitor {
     }
 
     const cached = this.accounts.get(account.key);
+    const minRefreshMs = account.minRefreshMs ?? 0;
+    if (cached) {
+      cached.minRefreshMs = minRefreshMs;
+    }
     if (cached?.pending) {
-      return { ok: true, value: await cached.pending };
+      return cached.pending;
     }
 
     const now = this.clock.now();
     const expired = cached?.snapshot.windows.some(
       (window) => window.resetsAt !== null && window.resetsAt <= now,
     );
-    const retryAt = mode === "manual" ? cached?.retry?.retryAfterAt : cached?.retry?.retryAt;
+    const retryAt = retryDeadline(cached?.retry, mode);
     const cacheMs = mode === "manual" ? 0 : mode === "automatic" ? 2000 : intervalMs;
-    if (cached && (now < (retryAt ?? 0) || (!expired && now - cached.attemptedAt < cacheMs))) {
+    if (
+      cached &&
+      (now < cached.attemptedAt + minRefreshMs ||
+        now < retryAt ||
+        (cached.snapshot.status !== "loading" && !expired && now - cached.attemptedAt < cacheMs))
+    ) {
       return { ok: true, value: cached.snapshot };
     }
 
-    const entry: AccountCache = cached ?? { snapshot: empty(account.provider), attemptedAt: now };
+    const entry: AccountCache = cached ?? {
+      snapshot: empty(account.provider),
+      attemptedAt: now,
+      minRefreshMs,
+    };
     entry.attemptedAt = now;
 
     const releasePending = () => {
@@ -297,46 +432,63 @@ export class UsageMonitor {
         delete entry.pending;
       }
     };
-    const job = this.load(account, signal, entry)
-      .then(({ snapshot, retry }) => {
-        if (!this.stopped && !signal.aborted && entry.pending === job) {
-          entry.snapshot = snapshot;
-          if (retry) {
-            entry.retry = retry;
-          } else {
-            delete entry.retry;
-          }
-          for (const [name, key] of this.accountKeys) {
-            if (key === account.key) {
-              this.publish(name, snapshot);
-            }
+    const cancelled = Promise.withResolvers<Result<ProviderUsage, ExpectedError>>();
+    const abortPending = () => {
+      const error = signal.reason instanceof UsageError ? signal.reason : new CancelledError();
+      if (entry.pending === job && error instanceof UsageError) {
+        entry.snapshot = failed(entry.snapshot, error);
+        entry.retry = this.backoff(entry.retry, error);
+      }
+      releasePending();
+      cancelled.resolve(err(error));
+    };
+    const current = () =>
+      !this.stopped &&
+      !signal.aborted &&
+      this.accounts.get(account.key) === entry &&
+      entry.pending === job;
+    const load = this.load(account, signal, entry)
+      .then(({ snapshot, retry }): Result<ProviderUsage, ExpectedError> => {
+        if (!current()) {
+          return err(new CancelledError());
+        }
+
+        entry.snapshot = snapshot;
+        if (retry) {
+          entry.retry = retry;
+        } else {
+          delete entry.retry;
+        }
+        for (const [name, key] of this.accountKeys) {
+          if (key === account.key) {
+            this.publish(name, snapshot);
           }
         }
 
-        return snapshot;
+        return { ok: true, value: snapshot };
       })
       .catch((error: unknown) => {
-        if (!this.stopped && !signal.aborted && entry.pending === job) {
+        if (current()) {
           const failure = new UsageError("USAGE_QUERY_FAILED", "Unexpected account usage failure.");
           entry.snapshot = failed(entry.snapshot, failure);
           entry.retry = this.backoff(entry.retry, failure);
         }
 
         throw error;
-      })
-      .finally(() => {
-        releasePending();
-        signal.removeEventListener("abort", releasePending);
       });
+    const job = Promise.race([load, cancelled.promise]).finally(() => {
+      releasePending();
+      signal.removeEventListener("abort", abortPending);
+    });
 
     entry.pending = job;
     this.accounts.set(account.key, entry);
-    signal.addEventListener("abort", releasePending, { once: true });
+    signal.addEventListener("abort", abortPending, { once: true });
     if (signal.aborted) {
-      releasePending();
+      abortPending();
     }
 
-    return { ok: true, value: await job };
+    return job;
   }
 
   private async load(
@@ -385,24 +537,26 @@ export class UsageMonitor {
   private retryAt(provider: string, mode: RefreshMode = "cached"): number {
     const key = this.accountKeys.get(provider);
     const account = key === undefined ? undefined : this.accounts.get(key);
-    // Explicit reloads bypass our backoff, never a server-imposed Retry-After deadline.
-    const deadline = (retry: RetryState | undefined) =>
-      (mode === "manual" ? retry?.retryAfterAt : retry?.retryAt) ?? 0;
-
-    return Math.max(deadline(this.providerRetries.get(provider)), deadline(account?.retry));
+    return Math.max(
+      retryDeadline(this.providerRetries.get(provider), mode),
+      retryDeadline(account?.retry, mode),
+    );
   }
 
   private nextRefreshAt(provider: string, now: number): number {
+    const key = this.accountKeys.get(provider);
+    const account = key === undefined ? undefined : this.accounts.get(key);
+    const minRefreshAt = account ? account.attemptedAt + account.minRefreshMs : 0;
     const retryAt = this.retryAt(provider);
     if (retryAt) {
-      return retryAt;
+      return Math.max(minRefreshAt, retryAt);
     }
 
     const resets = (this.snapshots.get(provider)?.windows ?? []).flatMap((window: UsageWindow) =>
       window.resetsAt !== null && window.resetsAt > now ? [window.resetsAt] : [],
     );
 
-    return Math.min(this.nextPollAt ?? now + intervalMs, ...resets);
+    return Math.max(minRefreshAt, Math.min(this.nextPollAt ?? now + intervalMs, ...resets));
   }
 
   private publish(provider: string, snapshot: ProviderUsage): void {
@@ -474,7 +628,11 @@ export class UsageMonitor {
 
     await Promise.all(this.jobs);
     this.watchers.clear();
-    this.accounts.clear();
+    this.groups.clear();
+    this.providers.clear();
+    if (this.ownsCache) {
+      this.accounts.clear();
+    }
     this.snapshots.clear();
   }
 }

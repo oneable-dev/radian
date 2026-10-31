@@ -356,6 +356,112 @@ test("SDK sessions receive usage before prompts and refresh after final completi
   }
 });
 
+test("Connected provider usage survives SDK model switches and refreshes and disposes with legacy usage", async () => {
+  // Connected account snapshots are independent of the current SDK model and need no model requests.
+  const clock = new ManualClock();
+  const lookups: Record<string, number> = {};
+  let prompts = 0;
+  const providers = ["anthropic", "openai"];
+  const usage = new UsageMonitor(async (provider) => {
+    if (!providers.includes(provider)) {
+      return ok(null);
+    }
+
+    return ok({
+      key: `private-${provider}`,
+      provider,
+      load: async () => {
+        const attempt = (lookups[provider] ?? 0) + 1;
+        lookups[provider] = attempt;
+
+        return ok([
+          {
+            id: "weekly",
+            usedPercent: (provider === "anthropic" ? 20 : 70) + attempt,
+            periodMs: 604800000,
+            resetsAt: provider === "anthropic" ? 600000 : 900000,
+          },
+        ]);
+      },
+    });
+  }, clock);
+  usage.setProviders(providers);
+  const app = await mount(
+    async () => {
+      prompts++;
+    },
+    [],
+    usage,
+  );
+  const initial = app.session.model!;
+  const settle = async () => {
+    for (let i = 0; i < 70; i++) {
+      await Promise.resolve();
+    }
+  };
+  try {
+    expect(Object.keys(app.executor.state.telemetry?.providerUsage ?? {})).toEqual(providers);
+    await settle();
+    const connected = app.executor.state.telemetry?.providerUsage;
+    expect(connected?.anthropic?.windows[0]?.usedPercent).toBe(21);
+    expect(connected?.openai?.windows[0]?.usedPercent).toBe(71);
+    expect(connected?.anthropic?.windows[0]?.resetsAt).toBe(600000);
+    expect(connected?.openai?.windows[0]?.resetsAt).toBe(900000);
+    expect(app.executor.state.telemetry?.usage?.status).toBe("unavailable");
+
+    // Switching through both providers and an unrelated model must retain every connected snapshot.
+    for (const provider of providers) {
+      app.session.modelRuntime.registerProvider(provider, {
+        api: "openai-responses",
+        apiKey: "offline",
+        baseUrl: "http://127.0.0.1:1",
+        models: [
+          {
+            id: `${provider}-fixture`,
+            name: "Offline fixture",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 200000,
+            maxTokens: 8192,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      });
+      await app.session.setModel(
+        app.session.modelRuntime.getModel(provider, `${provider}-fixture`)!,
+      );
+      const state = app.executor.state.telemetry;
+      expect(state?.usage).toEqual(connected?.[provider]);
+      expect(state?.providerUsage).toEqual(connected);
+    }
+    await app.session.setModel(initial);
+    expect(app.executor.state.telemetry?.providerUsage).toEqual(connected);
+    expect(lookups).toEqual({ anthropic: 1, openai: 1 });
+
+    // Reload refreshes all connected providers even when the current model has no supported account.
+    expectOk(await app.executor.reload());
+    await settle();
+    expect(lookups).toEqual({ anthropic: 2, openai: 2 });
+    expect(app.executor.state.telemetry?.providerUsage?.anthropic?.windows[0]?.usedPercent).toBe(
+      22,
+    );
+    expect(app.executor.state.telemetry?.providerUsage?.openai?.windows[0]?.usedPercent).toBe(72);
+    expect(JSON.stringify(app.executor.state.telemetry)).not.toContain("private-");
+    expect(prompts).toBe(0);
+    expect(app.session.messages).toHaveLength(0);
+    usage.setActive(true);
+    await settle();
+    expectOk(await app.executor.close());
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600000);
+    await settle();
+    expect(lookups).toEqual({ anthropic: 2, openai: 2 });
+  } finally {
+    await app.close();
+    await usage.stop();
+  }
+});
+
 test.each(["authentication", "usage"] as const)(
   "Only /reload bypasses %s backoff while completion refreshes respect existing delays",
   async (stage) => {

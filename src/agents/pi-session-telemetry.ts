@@ -2,7 +2,11 @@ import { estimateTokens, type AgentSession } from "@earendil-works/pi-coding-age
 import { getCurrentSystemMessage, type Api, type Model } from "@earendil-works/pi-ai";
 import type { SessionTelemetry, WeeklyQuota } from "./telemetry.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
-import type { UsageRefreshMode, UsageSubscription } from "../usage/model.ts";
+import type {
+  UsageGroupSubscription,
+  UsageRefreshMode,
+  UsageSubscription,
+} from "../usage/model.ts";
 import type { FastMode } from "./fast-mode.ts";
 
 const weekMinutes = 7 * 24 * 60;
@@ -99,6 +103,7 @@ export class PiSessionTelemetry {
   private contextCache: { key: string; value: SessionTelemetry["context"] } | undefined;
   private readonly previous;
   private readonly usage: UsageSubscription | undefined;
+  private readonly providerUsage: UsageGroupSubscription | undefined;
   private readonly unsubscribeFast: (() => void) | undefined;
 
   constructor(
@@ -108,6 +113,7 @@ export class PiSessionTelemetry {
     private readonly fastMode?: FastMode,
   ) {
     this.usage = usage?.watch(changed);
+    this.providerUsage = usage?.watchAll(changed);
     this.unsubscribeFast = fastMode?.subscribe(changed);
 
     const agent = session.agent;
@@ -218,6 +224,7 @@ export class PiSessionTelemetry {
       context: this.contextCache.value,
       weekly: matches && this.weekly && this.weekly.resetsAt > Date.now() ? this.weekly : null,
       ...(this.usage ? { usage: this.usage.read(model?.provider ?? null) } : {}),
+      ...(this.providerUsage ? { providerUsage: this.providerUsage.read() } : {}),
     };
   }
 
@@ -231,10 +238,12 @@ export class PiSessionTelemetry {
   refreshUsage(mode: UsageRefreshMode = "automatic"): void {
     this.read();
     this.usage?.refresh(mode);
+    this.providerUsage?.refresh(mode);
   }
 
   dispose(): void {
     this.usage?.dispose();
+    this.providerUsage?.dispose();
     this.unsubscribeFast?.();
 
     const agent = this.session.agent;

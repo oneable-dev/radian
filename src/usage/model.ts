@@ -21,6 +21,8 @@ export type ProviderUsage = {
 export type UsageAccount = {
   readonly key: string;
   readonly provider: string;
+  // Provider-imposed minimum between usage requests, including manual refreshes.
+  readonly minRefreshMs?: number;
   load(signal: AbortSignal): Promise<Result<readonly UsageWindow[], ExpectedError>>;
 };
 
@@ -33,6 +35,12 @@ export type UsageRefreshMode = "automatic" | "manual";
 
 export type UsageSubscription = {
   read(provider: string | null): ProviderUsage;
+  refresh(mode?: UsageRefreshMode): void;
+  dispose(): void;
+};
+
+export type UsageGroupSubscription = {
+  read(): Readonly<Record<string, ProviderUsage>>;
   refresh(mode?: UsageRefreshMode): void;
   dispose(): void;
 };
