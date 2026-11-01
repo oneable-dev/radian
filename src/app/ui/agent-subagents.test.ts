@@ -381,6 +381,60 @@ test("Children remain visible after the parent settles and terminal durations st
   }
 });
 
+test.each([60, 120])(
+  "At width %i, waiting descendants retain ancestry after the root and owner stop producing output",
+  async (width) => {
+    // A root's completed message cannot hide a worker still waiting on its immediate owner.
+    const app = await mount(width);
+    const lead = {
+      ...child("lead-run", 1000),
+      name: "tech-lead",
+      ownerId: "root",
+      depth: 1,
+      status: "complete" as const,
+    };
+    const worker = {
+      ...child("worker-run", 2000),
+      name: "engineer",
+      ownerId: lead.id,
+      depth: 2,
+      phase: "waiting" as const,
+    };
+    try {
+      pressLeader(app, "a");
+      const focus = app.renderer.currentFocusedRenderable;
+
+      await app.update([lead, worker], "complete");
+      app.clock.advance(12_000);
+      await app.render();
+
+      // Active-first ordering keeps the owner path, focus, and unsent text without exposing run IDs.
+      expect(app.list.visible).toBe(true);
+      expect(app.headings()[0]).toContain("tech-lead › engineer · Waiting");
+      expect(app.headings()[1]).toBe("tech-lead · Complete (1s)");
+      expect(app.headings().join("\n")).not.toContain("worker-run");
+      expect(app.renderer.currentFocusedRenderable).toBe(focus);
+      expect(app.view.promptDrafts.a1).toBe("Retained unsent draft");
+
+      await app.update([
+        lead,
+        {
+          ...child(worker.id, 2000),
+          name: worker.name,
+          ownerId: lead.id,
+          depth: 2,
+          status: "complete",
+        },
+      ]);
+      app.clock.advance(10_000);
+      await app.render();
+      expect(app.list.visible).toBe(false);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
 test("All settled child feedback disappears together after ten seconds without changing focus or drafts", async () => {
   // One settled row must stay visible while another child is still working.
   const app = await mount();

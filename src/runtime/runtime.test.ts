@@ -147,6 +147,7 @@ test("Interrupt IPC merges queued input into one message while retaining session
     const other = expectOk(await client.create(tree.id));
 
     expect(client.snapshot.capabilities).toContain("agent-interrupt");
+    expect(client.snapshot.capabilities).toContain("recursive-delegation");
     expectOk(await client.prompt(id, "slow"));
     expectOk(await client.prompt(other, "slow"));
     expectOk(await client.prompt(id, "Add tests"));

@@ -588,6 +588,7 @@ export class WorkspaceRuntime {
         "session-tab-commands",
         "session-exit",
         "agent-interrupt",
+        "recursive-delegation",
         "model-selection",
         "model-effort",
         "completion-catalog",

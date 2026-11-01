@@ -6,6 +6,7 @@ import {
   type CliRenderer,
 } from "@opentui/core";
 import type { Subagent } from "../model.ts";
+import { compactSubagentLabel, subagentLabels } from "../subagent-labels.ts";
 import { icons } from "../../icons.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
@@ -255,6 +256,7 @@ export class SubagentSummary {
     let captions = Math.max(0, this.maximumRows - shown.length - Number(overflowRow));
     let rows = 0;
     let ticking = false;
+    const labels = subagentLabels(this.children);
     for (const row of this.items.values()) {
       row.root.visible = false;
     }
@@ -321,8 +323,8 @@ export class SubagentSummary {
         elapsed === undefined ? "" : ` (${elapsed < 1000 ? "0s" : formatRunDuration(elapsed)})`;
       const width = Math.max(0, this.root.width - 5);
       const suffix = ` · ${label}${duration}`;
-      const name = truncateCells(
-        singleLine(child.name),
+      const name = compactSubagentLabel(
+        labels.get(child.id) ?? child.name,
         Math.max(0, width - Bun.stringWidth(suffix)),
       );
       const state = truncateCells(suffix, Math.max(0, width - Bun.stringWidth(name)));

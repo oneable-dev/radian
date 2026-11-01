@@ -9,6 +9,7 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { ok } from "../result.ts";
+import { readAgentProfile } from "./agent-profiles.ts";
 
 type Run = {
   id: string;
@@ -275,7 +276,11 @@ test("An unseen question wakes an idle parent and is answered without a second s
       return last?.role === "user"
         ? response(model, {
             tool: "radian-subagent",
-            args: { action: "spawn", agent: "worker", task: "child-needs-decision" },
+            args: {
+              action: "spawn",
+              agent: "worker",
+              task: "child-needs-decision",
+            },
           })
         : response(model, { text: "Delegated the decision test." });
     if (input === "child-needs-decision")
@@ -311,7 +316,10 @@ test("An unseen question wakes an idle parent and is answered without a second s
           .filter((part) => part.name === "radian-subagent")
           .at(-1)?.arguments.action === "reply"
       )
-        return response(model, { tool: "radian-subagent", args: { action: "wait", id } });
+        return response(model, {
+          tool: "radian-subagent",
+          args: { action: "wait", id },
+        });
       return response(model, { text: "Parent handled the child decision." });
     }
     return base(model, context, options);
@@ -378,9 +386,15 @@ test("A rejected launch is reported by its tool result without an additional com
       return context.messages.at(-1)?.role === "user"
         ? response(model, {
             tool: "radian-subagent",
-            args: { action: "spawn", agent: "worker", task: "Should be rejected" },
+            args: {
+              action: "spawn",
+              agent: "worker",
+              task: "Should be rejected",
+            },
           })
-        : response(model, { text: "The required role dependency is unavailable." });
+        : response(model, {
+            text: "The required role dependency is unavailable.",
+          });
     return base(model, context, options);
   });
   try {
@@ -433,7 +447,11 @@ test("Host protocols remain role-scoped without an installed orchestration skill
     expectOk(await app.registry.reload(app.parent));
     expectOk(await app.registry.prompt(app.parent, "inspect-parent"));
     const run = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "inspect-child" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "inspect-child",
+      }),
     ) as Run;
     expectOk(await app.coordinate({ action: "wait", id: run.id }));
     const parent = prompts.get("inspect-parent")!;
@@ -586,7 +604,11 @@ test("SDK role tools deny unlisted writes while required skills are injected and
     );
 
     const spawned = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "write-forbidden" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "write-forbidden",
+      }),
     ) as Run;
     const done = expectOk(await app.coordinate({ action: "wait", id: spawned.id })) as Run[];
 
@@ -621,7 +643,11 @@ test("Closing a parent releases blocked questions and scopes run identities to t
   });
   try {
     const run = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "ask-forever" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "ask-forever",
+      }),
     ) as Run;
     await asked.promise;
     const other = expectOk(await app.registry.create(app.repository.worktrees[0]!.id));
@@ -630,14 +656,24 @@ test("Closing a parent releases blocked questions and scopes run identities to t
     )!;
 
     expect(
-      expectError(await otherContext.coordinateSubagents!({ action: "status", id: run.id })).code,
+      expectError(
+        await otherContext.coordinateSubagents!({
+          action: "status",
+          id: run.id,
+        }),
+      ).code,
     ).toBe("INVALID_INPUT");
     expectOk(await app.registry.close(app.parent));
 
     expect(app.registry.details(other)).not.toBeNull();
     expect(
       expectError(
-        await app.coordinate({ action: "reply", id: run.id, questionId: "late", message: "Late" }),
+        await app.coordinate({
+          action: "reply",
+          id: run.id,
+          questionId: "late",
+          message: "Late",
+        }),
       ).code,
     ).toBe("SESSION_NOT_OPEN");
   } finally {
@@ -667,7 +703,11 @@ test("Steer reaches an active SDK child without replacing its conversation", asy
   spyOn(app.executors[0]!, "notifySubagent").mockImplementation(() => {});
   try {
     const run = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "hold-child" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "hold-child",
+      }),
     ) as Run;
     await started.promise;
     const child = app.executors[1]!;
@@ -683,7 +723,10 @@ test("Steer reaches an active SDK child without replacing its conversation", asy
     finish!();
     expectOk(await app.coordinate({ action: "wait", id: run.id }));
 
-    expect(queued).toMatchObject({ disposition: "queued", compliance: "not-confirmed" });
+    expect(queued).toMatchObject({
+      disposition: "queued",
+      compliance: "not-confirmed",
+    });
     expect(child.savedSessionId).toBe(identity);
     expect(await readFile(child.sessionFile!, "utf8")).toContain(
       "Limit changes to the API client.",
@@ -770,7 +813,11 @@ test("Waiting for one child returns another child's pending question instead of 
     ) as Run;
     const waiting = app.coordinate({ action: "wait", id: a.id });
     const b = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "ask-other" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "ask-other",
+      }),
     ) as Run;
 
     const attention = expectOk(await waiting) as Run[];
@@ -821,7 +868,11 @@ test("SDK nested MCP calls cannot escape a role allowlist", async () => {
     await app.profile("tools: [read, proxy]\n");
 
     const run = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "nested-denied" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "nested-denied",
+      }),
     ) as Run;
     const done = expectOk(await app.coordinate({ action: "wait", id: run.id })) as Run[];
 
@@ -864,7 +915,11 @@ test("Role dependencies registered at session_start and resources_discover are v
     await app.profile("tools: [read, late-helper]\nskills: [late-skill]\n");
 
     const run = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "late-dependencies" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "late-dependencies",
+      }),
     ) as Run;
     const done = expectOk(await app.coordinate({ action: "wait", id: run.id })) as Run[];
 
@@ -947,7 +1002,11 @@ test("Delayed child cleanup cannot notify and restart an interrupted parent", as
   try {
     const parent = expectOk(await registry.create("demo:main"));
     expectOk(
-      await context!.coordinateSubagents!({ action: "spawn", agent: "worker", task: "Cancelable" }),
+      await context!.coordinateSubagents!({
+        action: "spawn",
+        agent: "worker",
+        task: "Cancelable",
+      }),
     );
 
     const stopped = registry.interrupt(parent);
@@ -1014,7 +1073,11 @@ test("Checkpoint restore retains results and archive paths without resurrecting 
   let restored: SessionRegistry | undefined;
   try {
     const first = expectOk(
-      await app.coordinate({ action: "spawn", agent: "worker", task: "First completed task" }),
+      await app.coordinate({
+        action: "spawn",
+        agent: "worker",
+        task: "First completed task",
+      }),
     ) as Run;
     expectOk(await app.coordinate({ action: "wait", id: first.id }));
     const checkpoint = app.registry.records[0]!;
@@ -1065,6 +1128,148 @@ test("Checkpoint restore retains results and archive paths without resurrecting 
     expect(restored.details(record.id)?.attention?.outcome).toBe("unfinished");
   } finally {
     await restored?.shutdown();
+    await app.cleanup();
+  }
+});
+
+test("A read-only delegating Lead launches a writable Engineer through the host coordinator", async () => {
+  // The Lead's personal tool limits do not bound its target; legacy aliases remain blocked.
+  const tools = new Map<string, string[]>();
+  const prompts = new Map<string, string>();
+  const app = await fixture((base) => (model, context, options) => {
+    const user = context.messages.findLast((message) => message.role === "user");
+    const input = user?.role === "user" ? text(user.content) : "";
+    const calls = context.messages
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) => message.content)
+      .filter((part) => part.type === "toolCall");
+    if (input === "lead-task") {
+      tools.set(
+        input,
+        context.messages.flatMap((message) =>
+          message.role === "system" ? (message.toolsAdded ?? []).map((tool) => tool.name) : [],
+        ),
+      );
+      prompts.set(
+        input,
+        context.messages
+          .filter((message) => message.role === "system")
+          .map(getSystemMessageText)
+          .join("\n"),
+      );
+      if (calls.length === 0) return response(model, { tool: "subagent", args: {} });
+      if (calls.length === 1)
+        return response(model, {
+          tool: "write",
+          args: { path: "lead-write.txt", content: "Lead must not write" },
+        });
+      if (calls.length === 2)
+        return response(model, {
+          tool: "radian-subagent",
+          args: { action: "spawn", agent: "engineer", task: "engineer-task" },
+        });
+      if (calls.length === 3) {
+        const spawned = context.messages.findLast((message) => message.role === "toolResult");
+        const id = spawned?.role === "toolResult" ? JSON.parse(text(spawned.content)).id : "";
+        return response(model, {
+          tool: "radian-subagent",
+          args: { action: "wait", id },
+        });
+      }
+      return response(model, { text: "LEAD_DONE" });
+    }
+    if (input === "engineer-task") {
+      if (!calls.length)
+        return response(model, {
+          tool: "write",
+          args: { path: "engineer.txt", content: "ENGINEER_WROTE" },
+        });
+      return response(model, { text: "ENGINEER_DONE" });
+    }
+    return base(model, context, options);
+  });
+  spyOn(app.executors[0]!, "notifySubagent").mockImplementation(() => {});
+  try {
+    await writeFile(
+      join(app.agentDir, "agents", "lead.md"),
+      "---\nname: lead\ndescription: Read-only lead\ntools: [read]\ndelegation:\n  enabled: true\n---\nCoordinate.\n",
+    );
+    await writeFile(
+      join(app.agentDir, "agents", "engineer.md"),
+      "---\nname: engineer\ndescription: Writer\ntools: [read, write]\n---\nImplement.\n",
+    );
+    // Host tools resolve the trusted profile; direct hook callers without one get a leaf.
+    const lead = expectOk(readAgentProfile(join(app.agentDir, "agents", "lead.md")));
+    const run = expectOk(
+      await app.coordinate(
+        { action: "spawn", agent: "lead", task: "lead-task" },
+        undefined,
+        undefined,
+        lead,
+      ),
+    ) as Run;
+    // Editing the launch profile after spawn cannot change the running Lead's capability.
+    await writeFile(
+      join(app.agentDir, "agents", "lead.md"),
+      "---\nname: lead\ndescription: Escalated\ntools: [read, write, bash]\n---\nEscalate.\n",
+    );
+    const [done] = expectOk(await app.coordinate({ action: "wait", id: run.id })) as Run[];
+
+    expect(done).toMatchObject({ status: "complete", output: "LEAD_DONE" });
+    expect(await readFile(join(app.main, "engineer.txt"), "utf8")).toBe("ENGINEER_WROTE");
+    expect(await Bun.file(join(app.main, "lead-write.txt")).exists()).toBe(false);
+    expect(tools.get("lead-task")).toContain("radian-subagent");
+    expect(tools.get("lead-task")).not.toContain("write");
+    expect(tools.get("lead-task")).not.toContain("subagent");
+    expect(prompts.get("lead-task")).toContain('<radian_subagents role="delegating-child">');
+    const rows = app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents;
+    expect(rows.map((row) => [row.name, row.depth])).toEqual([
+      ["lead", 1],
+      ["engineer", 2],
+    ]);
+    expect(rows[1]!.ownerId).toBe(run.id);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Planning runs stay read-only nondelegating leaves despite delegation metadata", async () => {
+  const tools: string[][] = [];
+  const app = await fixture((base) => (model, context, options) => {
+    const user = context.messages.findLast((message) => message.role === "user");
+    if (user?.role === "user" && text(user.content).startsWith("plan-task"))
+      tools.push(
+        context.messages.flatMap((message) =>
+          message.role === "system" ? (message.toolsAdded ?? []).map((tool) => tool.name) : [],
+        ),
+      );
+    return base(model, context, options);
+  });
+  spyOn(app.executors[0]!, "notifySubagent").mockImplementation(() => {});
+  try {
+    await app.profile("tools: [read, write]\ndelegation: { enabled: true }\n");
+    const worker = expectOk(readAgentProfile(join(app.agentDir, "agents", "worker.md")));
+    const run = expectOk(
+      await app.contexts[0]!.coordinateSubagents!(
+        { action: "spawn", agent: "worker", task: "plan-task" },
+        undefined,
+        "planning",
+        worker,
+      ),
+    ) as Run;
+    expectOk(
+      await app.contexts[0]!.coordinateSubagents!(
+        { action: "wait", id: run.id },
+        undefined,
+        "planning",
+      ),
+    );
+    const planner = app.contexts.find((context) => context.purpose === "planning")!;
+
+    expect(planner.coordinateSubagents).toBeUndefined();
+    expect(tools[0]).not.toContain("radian-subagent");
+    expect(tools[0]).not.toContain("write");
+  } finally {
     await app.cleanup();
   }
 });

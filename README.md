@@ -281,6 +281,11 @@ current operating system and CPU. Distribute them together and preserve the pack
 symlinks. The executable includes Bun; owned SDK subagents run inside the Radian service
 without a separate Pi CLI or Node. Define their roles, models, required skills and tool
 allowlists in `~/.pi/agent/agents/*.md`, then coordinate them through `radian-subagent`.
+Profiles opting into `delegation.enabled: true` may supervise their own children; omitted/false stays
+leaf-only and planning children remain read-only and non-delegating. Each root shares a maximum of
+five active descendants, 128 retained runs and depth three. See the
+[domain-role examples](resources/agents/) and [delegation contracts](docs/reference.md#agent-profiles-and-collaboration)
+before migrating global profiles; finish work and explicitly restart an older service first.
 MCP and Web Access are bundled; `pi-subagents` is not. Git and Neovim remain external requirements. Builds disable automatic
 project `.env` and `bunfig.toml` loading; Radian settings and explicit provider
 authentication still apply.

@@ -5,6 +5,10 @@ import { requestSummarySchema } from "./request-summary.ts";
 export const ownedSubagentRecordSchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
+  // Optional ancestry; legacy records without it restore as direct root children.
+  ownerId: Type.Optional(Type.String()),
+  rootId: Type.Optional(Type.String()),
+  depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 3 })),
   status: Type.Union([
     Type.Literal("working"),
     Type.Literal("complete"),

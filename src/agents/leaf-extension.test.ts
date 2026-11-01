@@ -9,9 +9,16 @@ import { expectOk } from "../testing/results.ts";
 import { err } from "../result.ts";
 import { CapabilityError } from "../errors.ts";
 
-test.each(["subagent", "radian-subagent", "radian_subagent"])(
-  "Radian leaf sessions cannot gain delegation tool %s from discovered extensions",
-  async (name) => {
+test.each([
+  ["subagent", false],
+  ["radian-subagent", false],
+  ["radian_subagent", false],
+  ["subagent", true],
+  ["radian_subagent", true],
+  ["subagents_enable", true],
+] as const)(
+  "Radian children cannot use legacy delegation tool %s (delegating profile: %p)",
+  async (name, delegating) => {
     const files = await createWorktreeFixture();
     const agent = join(files.directory, "agent");
     const extensions = join(agent, "extensions");
@@ -48,6 +55,20 @@ test.each(["subagent", "radian-subagent", "radian_subagent"])(
     })({
       cwd: files.main,
       role: "subagent",
+      ...(delegating
+        ? {
+            agent: "lead",
+            profile: {
+              name: "lead",
+              description: "Delegating fixture",
+              skills: [],
+              prompt: "Coordinate.",
+              path: join(agent, "agents", "lead.md"),
+              delegation: { enabled: true },
+            },
+            coordinateSubagents: async () => err(new CapabilityError("Not expected")),
+          }
+        : {}),
       spawnSubagent: async () => err(new CapabilityError("No nested child expected")),
     });
     try {

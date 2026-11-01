@@ -9,6 +9,10 @@ export type Subagent = {
   readonly id: string;
   readonly name: string;
   readonly status: AgentStatus | null;
+  // Optional run-tree ancestry. Absent in older snapshots: a direct child of its session.
+  readonly ownerId?: string;
+  readonly rootId?: string;
+  readonly depth?: number;
   readonly request?: RequestSummary;
   readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number };
   readonly finishedAt?: number;

@@ -34,6 +34,10 @@ export const errorCodes = [
   "LEGACY_REMOTE_ERROR",
   "REMOTE_INTERNAL_ERROR",
   "GIT_DISCOVERY_FAILED",
+  "DELEGATION_DEPTH_EXCEEDED",
+  "DELEGATION_CAPACITY_EXCEEDED",
+  "DELEGATION_RETENTION_EXCEEDED",
+  "DELEGATION_UNFINISHED",
   ...usageErrorCodes,
   "GIT_QUERY_FAILED",
   "GIT_PREVIEW_UNAVAILABLE",
@@ -82,6 +86,19 @@ export class SessionError extends ExpectedError<
 export class CancelledError extends ExpectedError<"CANCELLED"> {
   constructor(message = "Operation was cancelled.", options?: ErrorOptions) {
     super("CANCELLED", message, options);
+  }
+}
+
+export type DelegationErrorCode =
+  | "DELEGATION_DEPTH_EXCEEDED"
+  | "DELEGATION_CAPACITY_EXCEEDED"
+  | "DELEGATION_RETENTION_EXCEEDED"
+  | "DELEGATION_UNFINISHED";
+
+/** Expected run-tree limits and lifecycle violations. Overflow is rejected, never queued. */
+export class DelegationError extends ExpectedError<DelegationErrorCode> {
+  constructor(code: DelegationErrorCode, message: string, options?: ErrorOptions) {
+    super(code, message, options);
   }
 }
 
@@ -280,7 +297,9 @@ export function knownError(error: unknown): ExpectedError | null {
 
   const code = systemCode(error);
   if (code && fileCodes.has(code)) {
-    return new StorageError(`Filesystem operation failed (${code}).`, code, { cause: error });
+    return new StorageError(`Filesystem operation failed (${code}).`, code, {
+      cause: error,
+    });
   }
 
   return null;

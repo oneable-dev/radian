@@ -70,10 +70,22 @@ import { CHAT_SCOPE_ID } from "./session-scope.ts";
 import { ExtensionUiBridge, type ExtensionUiResponse } from "./extension-ui.ts";
 import { McpAuthPicker } from "./mcp-auth-picker.ts";
 import { withComponentCommands } from "./extension-capabilities.ts";
-import { leafExcludedTools, leafPolicy } from "./leaf-extension.ts";
+import {
+  childToolPolicy,
+  coordinatorTool,
+  leafExcludedTools,
+  legacyDelegationTools,
+  supervisorToolName,
+} from "./leaf-extension.ts";
 import { commandDisplay, commandDisplayEntryType, type CommandDisplay } from "./command-display.ts";
-import { childSkills, discoverAgentProfiles, roleInstructions } from "./agent-profiles.ts";
-import { subagentTool, supervisorTool } from "./subagent-tools.ts";
+import {
+  childSkills,
+  delegates,
+  discoverAgentProfiles,
+  roleInstructions,
+  type AgentProfile,
+} from "./agent-profiles.ts";
+import { subagentTool, supervisorTool, type SubagentCommand } from "./subagent-tools.ts";
 import { subagentInstructions } from "./subagent-instructions.ts";
 import {
   SubagentNotifications,
@@ -142,16 +154,53 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     const mcpAuth = new McpAuthPicker();
     const profiles = () =>
       discoverAgentProfiles(agentDir, context.cwd, settingsManager.isProjectTrusted());
-    const discovered = context.role === "subagent" && context.agent ? profiles() : undefined;
+    // The host resolves and freezes a launch profile at spawn. Discover only when a host
+    // integration supplied a name alone; later profile edits never change a running child.
+    const discovered =
+      context.role === "subagent" && context.agent && !context.profile ? profiles() : undefined;
     if (discovered && !discovered.ok) throw discovered.error;
-    const profile = discovered?.ok
-      ? discovered.value.find((entry) => entry.name === context.agent)
-      : undefined;
+    const profile =
+      context.role === "subagent" && context.profile?.name === context.agent
+        ? context.profile
+        : discovered?.ok
+          ? discovered.value.find((entry) => entry.name === context.agent)
+          : undefined;
     let executor: PiSessionExecutor | undefined;
     if (context.agent && !profile)
       throw new InputError(
         `Unknown agent: ${context.agent}. Use radian-subagent list to discover profiles.`,
       );
+    // Capability is fixed for this run: host authorization plus profile metadata, never purpose
+    // chosen by the child. Planning runs remain read-only proposal leaves.
+    const delegating =
+      context.role === "subagent" &&
+      context.purpose !== "planning" &&
+      delegates(profile) &&
+      context.coordinateSubagents !== undefined;
+    const coordinates = context.role === "main" || delegating;
+    const coordinate = async (
+      command: SubagentCommand,
+      signal?: AbortSignal,
+    ): Promise<Result<unknown, ExpectedError>> => {
+      let target: AgentProfile | undefined;
+      if (command.action === "list" || command.action === "spawn") {
+        const available = profiles();
+        if (!available.ok) return available;
+        if (command.action === "list")
+          return ok(available.value.map(({ prompt: _prompt, ...entry }) => entry));
+        target = available.value.find((entry) => entry.name === command.agent);
+        if (!target)
+          return err(
+            new InputError(
+              `Unknown agent ${command.agent}. Available: ${available.value.map((entry) => entry.name).join(", ") || "none"}.`,
+            ),
+          );
+      }
+      return (
+        context.coordinateSubagents?.(command, signal, undefined, target) ??
+        err(new CapabilityError("This session cannot coordinate subagents."))
+      );
+    };
     const resourceLoader: ResourceLoader = sessionResourceLoader({
       cwd: context.cwd,
       agentDir,
@@ -179,8 +228,11 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           }
         : {}),
       appendSystemPromptOverride: (base) => {
-        const instructions = [...base, subagentInstructions[context.role]];
-        if (context.role === "subagent") return instructions;
+        const instructions = [
+          ...base,
+          subagentInstructions[delegating ? "delegatingSubagent" : context.role],
+        ];
+        if (!coordinates) return instructions;
         const catalog = profiles();
         if (!catalog.ok)
           return [
@@ -222,7 +274,12 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                   availableAgents: () => {
                     const available = profiles();
                     return available.ok
-                      ? ok(available.value.map(({ name, description }) => ({ name, description })))
+                      ? ok(
+                          available.value.map(({ name, description }) => ({
+                            name,
+                            description,
+                          })),
+                        )
                       : available;
                   },
                   coordinate: (command, signal) =>
@@ -234,7 +291,15 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
               ),
             ]
           : []),
-        ...(context.role === "subagent" ? [leafPolicy(profile?.tools, context.purpose)] : []),
+        ...(context.role === "subagent"
+          ? [
+              childToolPolicy({
+                allowed: profile?.tools,
+                purpose: context.purpose,
+                delegating,
+              }),
+            ]
+          : []),
         ...(profile
           ? [
               (pi: ExtensionAPI) => {
@@ -312,30 +377,19 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       // SDK 1.2 retains unmatched MCP tools for codemode unless an mcp__ selector exists.
       // The bare namespace prefix is not an MCP tool; it opts into strict matching.
       // leafPolicy remains authoritative for every direct and nested tool call.
-      ...(profile?.tools ? { tools: [...profile.tools, "radian-supervisor", "mcp__"] } : {}),
-      ...(context.role === "main"
+      // Delegation metadata grants the host coordinator even when tools is empty.
+      ...(profile?.tools
         ? {
-            customTools: [
-              subagentTool(async (command, signal) => {
-                if (command.action === "list" || command.action === "spawn") {
-                  const available = profiles();
-                  if (!available.ok) return available;
-                  if (command.action === "list")
-                    return ok(available.value.map(({ prompt: _prompt, ...entry }) => entry));
-                  if (!available.value.some((entry) => entry.name === command.agent))
-                    return err(
-                      new InputError(
-                        `Unknown agent ${command.agent}. Available: ${available.value.map((entry) => entry.name).join(", ") || "none"}.`,
-                      ),
-                    );
-                }
-                return (
-                  context.coordinateSubagents?.(command, signal) ??
-                  err(new CapabilityError("This session cannot coordinate subagents."))
-                );
-              }),
+            tools: [
+              ...profile.tools,
+              supervisorToolName,
+              ...(delegating ? [coordinatorTool] : []),
+              "mcp__",
             ],
           }
+        : {}),
+      ...(context.role === "main"
+        ? { customTools: [subagentTool(coordinate)] }
         : {
             customTools: [
               supervisorTool(
@@ -344,8 +398,9 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                   : undefined,
                 context.purpose === "planning",
               ),
+              ...(delegating ? [subagentTool(coordinate)] : []),
             ],
-            excludeTools: leafExcludedTools,
+            excludeTools: delegating ? legacyDelegationTools : leafExcludedTools,
           }),
     });
     let adopted = false;
@@ -364,7 +419,9 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
 
     return withCleanup(
       async () => {
-        await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
+        await mkdir(session.sessionManager.getSessionDir(), {
+          recursive: true,
+        });
         if (options.streamFn) {
           session.agent.streamFunction = options.streamFn;
         }
@@ -477,7 +534,10 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           await withCleanup(
             async () => {
               await session.abort();
-              await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+              await session.extensionRunner.emit({
+                type: "session_shutdown",
+                reason: "quit",
+              });
             },
             async () => {
               session.dispose();
@@ -638,7 +698,10 @@ export class PiSessionExecutor implements SessionExecutor {
     // The annotation follows its user entry so reverse History retains both at a prompt boundary.
     // Failure here cannot reject the already recorded request or its model turn.
     try {
-      manager.appendCustomEntry(commandDisplayEntryType, { messageId: entryId, parts: display });
+      manager.appendCustomEntry(commandDisplayEntryType, {
+        messageId: entryId,
+        parts: display,
+      });
     } catch (error) {
       // The SDK advances its leaf before writing; later records must not depend on a failed annotation.
       manager.branch(entryId);
@@ -1784,7 +1847,10 @@ export class PiSessionExecutor implements SessionExecutor {
             await this.interruptTask;
           }
 
-          await this.session.extensionRunner.emit({ type: "session_shutdown", reason });
+          await this.session.extensionRunner.emit({
+            type: "session_shutdown",
+            reason,
+          });
         },
         async () => {
           this.telemetry.dispose();
@@ -1911,7 +1977,9 @@ export class PiSessionExecutor implements SessionExecutor {
         completedAt: completion.completedAt,
         ...(this.request ? { request: this.request } : {}),
         ...(completion.outcome === "cancelled" && (this.closing || this.interrupting)
-          ? { cancellation: this.closing ? ("lifecycle" as const) : ("user" as const) }
+          ? {
+              cancellation: this.closing ? ("lifecycle" as const) : ("user" as const),
+            }
           : {}),
       };
       // Optional display persistence cannot turn an accepted, settled action into a rejected run.

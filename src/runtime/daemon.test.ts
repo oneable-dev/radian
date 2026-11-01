@@ -76,6 +76,7 @@ test("Concurrent registrations across repositories share one process with isolat
       runtimePaths(b.repository.id, true, stateRoot).directory,
     );
     expect(daemon.repositories).toHaveLength(2);
+    expect(daemon.capabilities).toContain("recursive-delegation");
     for (const client of clients) {
       expect(client.snapshot.capabilities).toContain("repository-catalog");
     }

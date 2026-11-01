@@ -829,6 +829,7 @@ class SharedDaemon {
         "session-tab-commands",
         "session-exit",
         "agent-interrupt",
+        "recursive-delegation",
         "resource-reload",
         "accounts",
         "account-labels",

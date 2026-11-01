@@ -16,9 +16,11 @@ import {
   parseJson,
   SessionError,
   CapabilityError,
+  DelegationError,
   reportUnexpected,
   type ExpectedError,
 } from "../errors.ts";
+import type { AgentProfile } from "./agent-profiles.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { TranscriptSection } from "./transcript.ts";
 import type { SessionTelemetry } from "./telemetry.ts";
@@ -72,7 +74,10 @@ export type ExecutionState = {
   readonly attention?: SessionResult;
   readonly externalSubagents?: readonly Subagent[];
   readonly pendingMessages?: readonly RequestSummary[];
-  readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number };
+  readonly runTiming?: {
+    readonly startedAt: number;
+    readonly elapsedMs: number;
+  };
 };
 
 export type SessionExecutor = {
@@ -121,11 +126,15 @@ export type SessionContext = {
   readonly startReason?: "new";
   readonly role: "main" | "subagent";
   readonly agent?: string;
+  /** Host-resolved launch profile, frozen at spawn so later edits cannot change this run. */
+  readonly profile?: AgentProfile;
   readonly purpose?: "planning";
+  /** Present for roots and for host-authorized delegating children only. */
   coordinateSubagents?(
     command: SubagentCommand,
     signal?: AbortSignal,
     purpose?: "planning",
+    target?: AgentProfile,
   ): Promise<Result<unknown, ExpectedError>>;
   contactSupervisor?(
     command: SupervisorCommand,
@@ -172,11 +181,29 @@ export type SessionDeletionCandidate = {
 // Creation is an exception-based SDK boundary. The registry converts only classified failures.
 export type SessionFactory = (context: SessionContext) => Promise<SessionExecutor>;
 
+// Run-tree limits. The root is depth 0 and is not counted against its own capacity.
+export const delegationLimits = {
+  maxDepth: 3,
+  activeDescendants: 5,
+  retainedRuns: 128,
+} as const;
+
 type Execution = {
   readonly id: string;
   readonly name: string;
   readonly role: "main" | "subagent";
   readonly purpose?: "planning";
+  // Subagent ancestry. Absent on roots; restored legacy records attach to the root.
+  owner?: Execution;
+  root?: OpenExecution;
+  depth?: number;
+  delegating?: boolean;
+  children?: Map<string, Execution>;
+  subtreeTask?: Promise<Result<void, ExpectedError>>;
+  // Keep a supervisor active until its whole subtree, not just its own handle, is closed.
+  closing?: boolean;
+  // Final text produced while owned runs were still active is not a genuine result.
+  unfinished?: boolean;
   planningProposal?: PlanningProposal;
   ready: Promise<Result<SessionExecutor, ExpectedError>> | undefined;
   finishedStatus?: AgentStatus | null;
@@ -260,7 +287,13 @@ export class SessionRegistry {
           state.notifications.length ||
           Object.keys(state.statuses).length ||
           state.mcp)
-        ? [{ sessionId: entry.id, conversationId: entry.executor!.savedSessionId, ...state }]
+        ? [
+            {
+              sessionId: entry.id,
+              conversationId: entry.executor!.savedSessionId,
+              ...state,
+            },
+          ]
         : [];
     });
   }
@@ -548,7 +581,7 @@ export class SessionRegistry {
                 entry.childrenSettledAt !== undefined &&
                 Date.now() >= entry.childrenSettledAt + 10_000
                   ? []
-                  : this.children(entry).filter((child) => !entry.hiddenChildren?.has(child.id)),
+                  : this.visibleChildren(entry),
               ...(state?.request ? { request: state.request } : {}),
               ...(state?.result ? { result: state.result } : {}),
               ...(entry.attention ? { attention: entry.attention } : {}),
@@ -677,7 +710,10 @@ export class SessionRegistry {
       return { openSessionId: null, unavailableReason: null };
     }
     if (owner.startsWith("retention:")) {
-      return { openSessionId: null, unavailableReason: "Saved session cleanup is in progress." };
+      return {
+        openSessionId: null,
+        unavailableReason: "Saved session cleanup is in progress.",
+      };
     }
 
     const entry = this.entries.get(owner);
@@ -747,7 +783,11 @@ export class SessionRegistry {
             ? { sessionFile: entry.executor.sessionFile }
             : {}),
         state: {
-          ...(this.details(entry.id) ?? { status: null, output: "", error: null }),
+          ...(this.details(entry.id) ?? {
+            status: null,
+            output: "",
+            error: null,
+          }),
           conversationId: entry.executor!.savedSessionId,
         },
         subagents: this.children(entry),
@@ -818,21 +858,29 @@ export class SessionRegistry {
   private ownedRecords(entry: OpenExecution): OwnedSubagentRecord[] {
     const expired =
       entry.childrenSettledAt !== undefined && Date.now() >= entry.childrenSettledAt + 10_000;
-    return [...entry.children.values()].map((child) => {
+    return [...this.descendants(entry)].map((child) => {
       const state = child.executor?.state;
       const runTiming = state?.runTiming ?? child.runTiming;
-      const finalOutput = state?.finalOutput ?? child.finalOutput;
+      const finalOutput =
+        child.unfinished || this.active(child)
+          ? undefined
+          : (state?.finalOutput ?? child.finalOutput);
       return {
         id: child.id,
         name: child.name,
-        status: child.failure ? "failure" : (state?.status ?? child.finishedStatus ?? null),
+        ...this.ancestry(entry, child),
+        status: this.active(child)
+          ? "working"
+          : child.failure
+            ? "failure"
+            : (state?.status ?? child.finishedStatus ?? null),
         ...(child.task !== undefined ? { task: child.task } : {}),
         output: state?.output ?? child.output ?? "",
         ...(finalOutput !== undefined ? { finalOutput } : {}),
         ...(child.failure ? { error: child.failure } : {}),
         ...(child.fileKey ? { sessionFile: child.fileKey } : {}),
         ...(child.closedAt !== undefined ? { finishedAt: child.closedAt } : {}),
-        hidden: expired || entry.hiddenChildren?.has(child.id) === true,
+        hidden: expired || this.hiddenRow(entry, child),
         ...(child.request ? { request: child.request } : {}),
         ...(runTiming ? { runTiming } : {}),
         progress: [...(child.channel?.progress ?? child.progress ?? [])],
@@ -848,7 +896,23 @@ export class SessionRegistry {
     executor: SessionExecutor,
     before?: SessionRecord,
   ): SessionRecord {
-    const state = executor.state;
+    let state = executor.state;
+    if (entry.role === "subagent" && (entry.failure || entry.unfinished)) {
+      const { finalOutput, result, attention: _attention, ...observed } = state;
+      state = {
+        ...observed,
+        status: "failure",
+        error: entry.failure ?? "The delegated result is incomplete.",
+        pendingMessages: [],
+        ...(!entry.unfinished && finalOutput !== undefined ? { finalOutput } : {}),
+        result: {
+          id: before?.state.result?.id ?? result?.id ?? crypto.randomUUID(),
+          outcome: entry.unfinished ? "unfinished" : "error",
+          completedAt: Date.now(),
+          ...(entry.request ? { request: entry.request } : {}),
+        },
+      };
+    }
     const sessionFile = entry.fileKey ?? executor.sessionFile;
     const telemetry = before?.state.telemetry ?? state.telemetry;
     const interrupted = state.status === "working";
@@ -871,7 +935,11 @@ export class SessionRegistry {
           ? {
               status: null,
               pendingMessages: [],
-              result: { id: crypto.randomUUID(), outcome: "unfinished", completedAt: Date.now() },
+              result: {
+                id: crypto.randomUUID(),
+                outcome: "unfinished",
+                completedAt: Date.now(),
+              },
             }
           : {}),
       },
@@ -887,8 +955,34 @@ export class SessionRegistry {
     return record;
   }
 
+  // Optional ancestry keeps older snapshots valid: absent fields mean a direct root child.
+  private ancestry(
+    entry: OpenExecution,
+    child: Execution,
+  ): { ownerId: string; rootId: string; depth: number } {
+    return {
+      ownerId: child.owner?.id ?? entry.id,
+      rootId: entry.id,
+      depth: child.depth ?? 1,
+    };
+  }
+
+  // A hidden batch hides its runs' descendants too.
+  private hiddenRow(entry: OpenExecution, child: Execution): boolean {
+    for (let node: Execution | undefined = child; node && node !== entry; node = node.owner)
+      if (entry.hiddenChildren?.has(node.id)) return true;
+    return false;
+  }
+
+  private visibleChildren(entry: OpenExecution): Subagent[] {
+    const hidden = new Set(
+      [...this.descendants(entry)].filter((child) => this.hiddenRow(entry, child)).map((c) => c.id),
+    );
+    return this.children(entry).filter((child) => !hidden.has(child.id));
+  }
+
   private children(entry: OpenExecution): Subagent[] {
-    const owned = [...entry.children.values()].map((child): Subagent => {
+    const owned = [...this.descendants(entry)].map((child): Subagent => {
       const state = child.executor?.state;
       const request = state?.request ?? child.request;
       const runTiming = state?.runTiming ?? child.runTiming;
@@ -897,10 +991,13 @@ export class SessionRegistry {
       return {
         id: child.id,
         name: child.name,
+        ...this.ancestry(entry, child),
         ...(progress ? { progress: progress.slice(0, 512) } : {}),
-        status: child.failure
-          ? "failure"
-          : (state?.status ?? child.finishedStatus ?? (child.ready ? "working" : null)),
+        status: this.active(child)
+          ? "working"
+          : child.failure
+            ? "failure"
+            : (state?.status ?? child.finishedStatus ?? null),
         ...(child.channel?.questions.length ? { phase: "waiting" as const } : {}),
         ...(child.closedAt !== undefined ? { finishedAt: child.closedAt } : {}),
         ...(request ? { request } : {}),
@@ -1013,14 +1110,18 @@ export class SessionRegistry {
         ? "Previous runtime ended during owned work; inspect saved results and submit a new prompt to continue."
         : restored.error,
     };
+    const restoredNodes = new Map<string, Execution>();
     for (const child of record.ownedSubagents ??
       record.subagents.filter((child) => child.source !== "pi")) {
       const saved = "output" in child ? child : undefined;
-      if (saved?.hidden) {
+      // Legacy records have no ancestry and attach to the root. Unknown owners do too.
+      const owner =
+        child.ownerId && child.ownerId !== entry.id ? restoredNodes.get(child.ownerId) : undefined;
+      if (saved?.hidden && !owner) {
         entry.hiddenChildren ??= new Set();
         entry.hiddenChildren.add(child.id);
       }
-      entry.children.set(child.id, {
+      const node: Execution = {
         ...(saved
           ? {
               output: saved.output,
@@ -1039,7 +1140,13 @@ export class SessionRegistry {
         ...(child.runTiming ? { runTiming: child.runTiming } : {}),
         closedAt: child.finishedAt ?? record.updatedAt ?? Date.now(),
         finishedStatus: child.status === "working" ? null : child.status,
-      });
+        root: entry,
+        depth: owner ? (owner.depth ?? 1) + 1 : 1,
+        ...(owner ? { owner } : { owner: entry }),
+      };
+      restoredNodes.set(node.id, node);
+      if (owner) (owner.children ??= new Map()).set(node.id, node);
+      else entry.children.set(node.id, node);
     }
 
     this.emit();
@@ -1050,14 +1157,22 @@ export class SessionRegistry {
   create(
     worktreeId: string,
     sessionFile?: string,
-    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+    identity?: {
+      readonly id: string;
+      readonly name: string;
+      readonly managed?: boolean;
+    },
   ): Promise<Result<string, ExpectedError>> {
     return this.createScoped({ kind: "code", worktreeId }, sessionFile, identity);
   }
 
   createChat(
     sessionFile?: string,
-    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+    identity?: {
+      readonly id: string;
+      readonly name: string;
+      readonly managed?: boolean;
+    },
   ): Promise<Result<string, ExpectedError>> {
     return this.createScoped({ kind: "chat" }, sessionFile, identity);
   }
@@ -1065,7 +1180,11 @@ export class SessionRegistry {
   private createScoped(
     scope: SessionScope,
     sessionFile?: string,
-    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+    identity?: {
+      readonly id: string;
+      readonly name: string;
+      readonly managed?: boolean;
+    },
   ): Promise<Result<string, ExpectedError>> {
     return this.trackScoped(scope, this.createScopedOnce(scope, sessionFile, identity));
   }
@@ -1073,7 +1192,11 @@ export class SessionRegistry {
   private async createScopedOnce(
     scope: SessionScope,
     sessionFile?: string,
-    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+    identity?: {
+      readonly id: string;
+      readonly name: string;
+      readonly managed?: boolean;
+    },
   ): Promise<Result<string, ExpectedError>> {
     if (scope.kind !== this.registryScope) {
       return err(new InputError("Session scope does not belong to this registry."));
@@ -1137,8 +1260,8 @@ export class SessionRegistry {
         ...(requestedFile ? { sessionFile: requestedFile } : {}),
         spawnSubagent: (name, task, signal) =>
           this.spawnSubagent(id, name, task, signal, generation),
-        coordinateSubagents: (command, signal, purpose) =>
-          this.coordinateSubagents(id, generation, command, signal, purpose),
+        coordinateSubagents: (command, signal, purpose, target) =>
+          this.coordinateSubagents(id, generation, command, signal, purpose, target),
       }),
     );
     const entry: OpenExecution = {
@@ -1336,7 +1459,7 @@ export class SessionRegistry {
     const entry = selected.value;
     if (
       entry.replacing ||
-      [...entry.children.values()].some(
+      [...this.descendants(entry)].some(
         (child) =>
           child.executor?.busy ||
           child.executor?.state.status === "working" ||
@@ -1543,7 +1666,7 @@ export class SessionRegistry {
       );
     }
     if (
-      [...entry.children.values()].some(
+      [...this.descendants(entry)].some(
         (child) =>
           child.executor?.busy ||
           child.executor?.state.status === "working" ||
@@ -1682,8 +1805,8 @@ export class SessionRegistry {
         ...(previousSessionFile ? { previousSessionFile } : {}),
         spawnSubagent: (name, task, signal) =>
           this.spawnSubagent(previous.id, name, task, signal, generation),
-        coordinateSubagents: (command, signal, purpose) =>
-          this.coordinateSubagents(previous.id, generation, command, signal, purpose),
+        coordinateSubagents: (command, signal, purpose, target) =>
+          this.coordinateSubagents(previous.id, generation, command, signal, purpose, target),
       }),
     );
     const created = await ready;
@@ -1734,7 +1857,11 @@ export class SessionRegistry {
             error:
               "Session replacement could not confirm cleanup of the previous conversation. Inspect the cleanup error before retrying.",
           };
-          result = err(new AgentRunError(previous.recoveredState.error!, { cause: stopped.error }));
+          result = err(
+            new AgentRunError(previous.recoveredState.error!, {
+              cause: stopped.error,
+            }),
+          );
         } else if (cancelled()) {
           result = err(new CancelledError("Session replacement was cancelled by shutdown."));
         } else {
@@ -1882,7 +2009,10 @@ export class SessionRegistry {
   }
 
   private notifyChild(owner: OpenExecution, child: Execution, event: SubagentNoticePayload): void {
+    // Only roots receive wake-up notifications. Nested owners observe their own children
+    // through status/wait inside their single run, so a settled Lead is never restarted.
     if (
+      child.owner !== owner ||
       this.entries.get(owner.id) !== owner ||
       owner.phase !== "open" ||
       owner.replacing ||
@@ -1913,12 +2043,52 @@ export class SessionRegistry {
     });
   }
 
+  /** Immediate children of a run-tree node. Roots always have a map; leaves have none. */
+  private ownedBy(node: Execution): Map<string, Execution> {
+    return node.role === "main" ? (node as OpenExecution).children : (node.children ??= new Map());
+  }
+
+  private active(node: Execution): boolean {
+    return node.ready !== undefined || node.closing === true;
+  }
+
+  /** Pre-order walk of every descendant below a node, owners before their children. */
+  private *descendants(node: Execution): Generator<Execution> {
+    for (const child of (node.role === "main"
+      ? (node as OpenExecution).children
+      : node.children
+    )?.values() ?? []) {
+      yield child;
+      yield* this.descendants(child);
+    }
+  }
+
+  // An owner may coordinate only while its root conversation is current and, for nested
+  // owners, while its own run has neither been cancelled nor released.
+  private ownerCurrent(node: Execution, root: OpenExecution, generation: string): boolean {
+    if (
+      this.entries.get(root.id) !== root ||
+      root.generation !== generation ||
+      root.phase !== "open" ||
+      root.replacing ||
+      this.shuttingDown
+    )
+      return false;
+    if (node === root) return true;
+    for (let current: Execution | undefined = node; current && current !== root;) {
+      if (!current.ready || current.controller?.signal.aborted) return false;
+      current = current.owner;
+    }
+    return node.root === root;
+  }
+
   private async coordinateSubagents(
     ownerId: string,
     generation: string,
     command: SubagentCommand,
     signal?: AbortSignal,
     purpose?: "planning",
+    target?: AgentProfile,
   ): Promise<Result<unknown, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
     if (!selected.ok) return selected;
@@ -1929,45 +2099,55 @@ export class SessionRegistry {
       );
     if (owner.replacing)
       return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
+    return this.coordinate(owner, owner, generation, command, signal, purpose, target);
+  }
+
+  private async coordinate(
+    node: Execution,
+    root: OpenExecution,
+    generation: string,
+    command: SubagentCommand,
+    signal?: AbortSignal,
+    purpose?: "planning",
+    target?: AgentProfile,
+  ): Promise<Result<unknown, ExpectedError>> {
     if (signal?.aborted) return err(new CancelledError());
+    if (!this.ownerCurrent(node, root, generation))
+      return err(new CancelledError("This owner can no longer coordinate subagents."));
     if (command.action === "list")
       return err(new CapabilityError("Profile discovery belongs to the session resource loader."));
+    const owned = this.ownedBy(node);
     if (command.action === "spawn") {
-      if (command.async === false && [...owner.children.values()].some((child) => child.ready))
+      if (target && target.name !== command.agent)
+        return err(new InputError("The resolved agent profile does not match the request."));
+      if (command.async === false && target?.delegation?.enabled === true)
+        return err(
+          new CapabilityError(
+            "Delegating agents run asynchronously only. Spawn without async: false and wait.",
+          ),
+        );
+      if (command.async === false && [...owned.values()].some((child) => this.active(child)))
         return err(
           new CapabilityError(
             "Use asynchronous spawn while other owned runs are active so questions can be answered.",
           ),
         );
-      if ([...owner.children.values()].filter((child) => child.ready).length >= 5)
-        return err(new InputError("This parent already has five active subagents."));
-      if (owner.children.size >= 128)
-        return err(
-          new InputError(
-            "This conversation has reached its retained-run limit. Start a new conversation.",
-          ),
-        );
       const background = command.async !== false;
       let childId: string | undefined;
-      const result = await this.spawnSubagent(
-        ownerId,
-        command.agent,
-        command.task,
-        signal,
-        generation,
+      const result = await this.spawnChild(node, root, generation, command.agent, command.task, {
+        ...(signal ? { signal } : {}),
         background,
-        (id) => {
+        onCreated: (id) => {
           childId = id;
         },
-        purpose,
-      );
-      return result.ok
-        ? ok(this.childStatus(owner.children.get(childId!)!, true, purpose))
-        : result;
+        ...(purpose ? { purpose } : {}),
+        ...(target ? { profile: target } : {}),
+      });
+      return result.ok ? ok(this.childStatus(owned.get(childId!)!, true, purpose)) : result;
     }
-    const children = command.id ? [owner.children.get(command.id)] : [...owner.children.values()];
+    const children = command.id ? [owned.get(command.id)] : [...owned.values()];
     if (children.some((child) => !child))
-      return err(new InputError("This run does not belong to the current conversation."));
+      return err(new InputError("This run does not belong to the current owner."));
     const runs = children as Execution[];
     if (purpose && runs.some((child) => child.purpose !== purpose))
       return err(new InputError("This run does not belong to the planning request."));
@@ -1975,38 +2155,34 @@ export class SessionRegistry {
       return ok(runs.map((child) => this.childStatus(child, command.id !== undefined, purpose)));
     if (command.action === "wait") {
       const settled = () =>
-        runs.every((child) => !child.ready || child.settled) ||
-        (purpose ? runs : [...owner.children.values()]).some(
-          (child) => child.channel?.questions.length,
-        );
+        runs.every((child) => !this.active(child)) ||
+        (purpose ? runs : [...owned.values()]).some((child) => child.channel?.questions.length);
+      const current = () => this.ownerCurrent(node, root, generation);
       if (!settled()) {
         const response = Promise.withResolvers<void>();
         const cancel = () => response.resolve();
         const unsubscribe = this.subscribe(() => {
-          if (settled() || owner.phase !== "open" || owner.replacing) response.resolve();
+          if (settled() || !current()) response.resolve();
         });
         signal?.addEventListener("abort", cancel, { once: true });
+        node.controller?.signal.addEventListener("abort", cancel, {
+          once: true,
+        });
         try {
           await response.promise;
         } finally {
           unsubscribe();
           signal?.removeEventListener("abort", cancel);
+          node.controller?.signal.removeEventListener("abort", cancel);
         }
-        if (signal?.aborted || owner.phase !== "open" || owner.replacing)
-          return err(new CancelledError());
+        if (signal?.aborted || !current()) return err(new CancelledError());
       }
-      if (runs.every((child) => !child.ready || child.settled))
+      if (runs.every((child) => !this.active(child)))
         await Promise.all(runs.flatMap((child) => (child.completion ? [child.completion] : [])));
-      if (
-        signal?.aborted ||
-        this.entries.get(ownerId) !== owner ||
-        owner.phase !== "open" ||
-        owner.replacing
-      )
-        return err(new CancelledError());
+      if (signal?.aborted || !current()) return err(new CancelledError());
       const attention = purpose
         ? []
-        : [...owner.children.values()].filter(
+        : [...owned.values()].filter(
             (child) => child.channel?.questions.length && !runs.includes(child),
           );
       return ok(
@@ -2038,33 +2214,43 @@ export class SessionRegistry {
   private childStatus(child: Execution, detail = true, purpose?: "planning"): unknown {
     const state = child.executor?.state;
     child.observedNoticeVersion = child.noticeVersion ?? 0;
-    if (!child.ready || child.settled) child.terminalObserved = true;
+    if (!this.active(child)) child.terminalObserved = true;
+    const live = [...this.descendants(child)].filter((descendant) =>
+      this.active(descendant),
+    ).length;
     return {
       id: child.id,
       agent: child.name,
       task: (child.task ?? child.request?.text)?.slice(0, detail ? 16_384 : 400),
-      status: child.failure
-        ? "failure"
-        : child.channel?.questions.length
+      status: this.active(child)
+        ? child.channel?.questions.length
           ? "waiting"
-          : child.ready
-            ? "working"
-            : (child.finishedStatus ?? "stopped"),
+          : "working"
+        : child.failure
+          ? "failure"
+          : (child.finishedStatus ?? "stopped"),
       currentTools: state?.activeTools ?? [],
       progress: (child.channel?.progress ?? child.progress ?? [])
         .slice(detail ? -16 : -1)
-        .map((update) => ({ ...update, message: update.message.slice(0, detail ? 2048 : 512) })),
+        .map((update) => ({
+          ...update,
+          message: update.message.slice(0, detail ? 2048 : 512),
+        })),
       questions: (child.channel?.questions ?? []).map((question) => ({
         ...question,
         message: question.message.slice(0, detail ? 16_384 : 512),
       })),
-      output: (state?.finalOutput ?? child.finalOutput ?? "").slice(0, 16_384),
+      output: (child.unfinished || this.active(child)
+        ? ""
+        : (state?.finalOutput ?? child.finalOutput ?? "")
+      ).slice(0, 16_384),
       recentOutput: (state?.output ?? child.output ?? "").slice(detail ? -16_384 : -512),
       ...(child.failure ? { error: child.failure } : {}),
       ...((state?.runTiming ?? child.runTiming)
         ? { runTiming: state?.runTiming ?? child.runTiming }
         : {}),
       ...(child.fileKey ? { sessionFile: child.fileKey } : {}),
+      ...(child.delegating ? { delegating: true, activeDescendants: live } : {}),
       ...(purpose === "planning" &&
       child.purpose === "planning" &&
       child.settled &&
@@ -2075,15 +2261,13 @@ export class SessionRegistry {
     };
   }
 
+  // Root-session spawning for host integrations; the root always owns the new run.
   private async spawnSubagent(
     ownerId: string,
     name: string,
     task: string,
     signal?: AbortSignal,
     generation?: string,
-    background = false,
-    onCreated?: (id: string) => void,
-    purpose?: "planning",
   ): Promise<Result<string, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
     if (!selected.ok) {
@@ -2106,34 +2290,91 @@ export class SessionRegistry {
       return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
     }
 
+    return this.spawnChild(owner, owner, owner.generation, name, task, signal ? { signal } : {});
+  }
+
+  /**
+   * Reserves a run-tree slot synchronously, then creates and runs one child. Limits are
+   * root-wide and checked in the same tick as the reservation so concurrent spawns cannot
+   * overshoot. Overflow is rejected immediately; nothing is queued.
+   */
+  private async spawnChild(
+    owner: Execution,
+    root: OpenExecution,
+    generation: string,
+    name: string,
+    task: string,
+    options: {
+      readonly signal?: AbortSignal;
+      readonly background?: boolean;
+      readonly onCreated?: (id: string) => void;
+      readonly purpose?: "planning";
+      readonly profile?: AgentProfile;
+    },
+  ): Promise<Result<string, ExpectedError>> {
+    const { signal, background = false, onCreated, purpose, profile } = options;
+    if (signal?.aborted) return err(new CancelledError());
+    if (!this.ownerCurrent(owner, root, generation))
+      return err(new CancelledError("This owner can no longer start subagents."));
+    const depth = (owner === root ? 0 : (owner.depth ?? 1)) + 1;
+    if (depth > delegationLimits.maxDepth)
+      return err(
+        new DelegationError(
+          "DELEGATION_DEPTH_EXCEEDED",
+          `Delegation is limited to ${delegationLimits.maxDepth} levels below the root. Do this work directly or return it to your owner.`,
+        ),
+      );
+    const tree = [...this.descendants(root)];
+    if (tree.filter((node) => this.active(node)).length >= delegationLimits.activeDescendants)
+      return err(
+        new DelegationError(
+          "DELEGATION_CAPACITY_EXCEEDED",
+          `This conversation already has ${delegationLimits.activeDescendants} active subagents across its run tree. Wait for or stop a run first; nothing was queued.`,
+        ),
+      );
+    if (tree.length >= delegationLimits.retainedRuns)
+      return err(
+        new DelegationError(
+          "DELEGATION_RETENTION_EXCEEDED",
+          "This conversation has reached its retained-run limit. Start a new conversation.",
+        ),
+      );
+
+    const owned = this.ownedBy(owner);
+    // Planning runs are proposal-only leaves regardless of profile metadata.
+    const delegating = purpose !== "planning" && profile?.delegation?.enabled === true;
     const child: Execution = {
       id: crypto.randomUUID(),
       name,
       task,
       role: "subagent",
       ...(purpose ? { purpose } : {}),
+      owner,
+      root,
+      depth,
+      ...(delegating ? { delegating: true, children: new Map() } : {}),
       ready: undefined,
       controller: new AbortController(),
-      ...(owner.worktree ? { worktree: owner.worktree } : {}),
+      ...(root.worktree ? { worktree: root.worktree } : {}),
       managed: true,
       request: summarizeRequest(task, 0),
     };
     child.channel = new SubagentChannel((event) => {
-      if (event.type !== "question-settled") this.notifyChild(owner, child, event);
+      if (event.type !== "question-settled" && owner === root) this.notifyChild(root, child, event);
       this.emit();
     });
     const ready = capture(() =>
       this.factory({
-        cwd: owner.worktree?.path ?? homedir(),
-        scope: owner.scope,
-        ...(owner.scope.kind === "code" ? { worktreeId: owner.scope.worktreeId } : {}),
+        cwd: root.worktree?.path ?? homedir(),
+        scope: root.scope,
+        ...(root.scope.kind === "code" ? { worktreeId: root.scope.worktreeId } : {}),
         role: "subagent",
         agent: name,
+        ...(profile ? { profile } : {}),
         ...(purpose ? { purpose } : {}),
         contactSupervisor: (command, childSignal) => {
           if (
-            owner.phase !== "open" ||
-            owner.replacing ||
+            !this.ownerCurrent(owner, root, generation) ||
             child.controller!.signal.aborted ||
             childSignal?.aborted
           )
@@ -2158,15 +2399,50 @@ export class SessionRegistry {
             );
           return child.channel!.contact(command, childSignal);
         },
-        spawnSubagent: async () => err(new InputError("Nested delegation is not enabled.")),
+        ...(delegating
+          ? {
+              // Host-owned: a child can neither choose a purpose nor reach another owner's runs.
+              coordinateSubagents: (command, childSignal, childPurpose, target) =>
+                childPurpose
+                  ? Promise.resolve(
+                      err(new CapabilityError("Only the root may start purpose-specific runs.")),
+                    )
+                  : this.coordinate(
+                      child,
+                      root,
+                      generation,
+                      command,
+                      childSignal,
+                      undefined,
+                      target,
+                    ),
+              spawnSubagent: (agent, childTask, childSignal) =>
+                this.spawnChild(
+                  child,
+                  root,
+                  generation,
+                  agent,
+                  childTask,
+                  childSignal ? { signal: childSignal } : {},
+                ),
+            }
+          : {
+              spawnSubagent: async () =>
+                err(new CapabilityError("This agent profile does not enable delegation.")),
+            }),
       }),
     );
+    // Reservation: the slot is held from here until confirmed cleanup clears `ready`.
     child.ready = ready;
-    if (owner.childrenSettledAt !== undefined && Date.now() >= owner.childrenSettledAt + 10_000) {
-      owner.hiddenChildren ??= new Set();
-      for (const id of owner.children.keys()) owner.hiddenChildren.add(id);
+    if (
+      owner === root &&
+      root.childrenSettledAt !== undefined &&
+      Date.now() >= root.childrenSettledAt + 10_000
+    ) {
+      root.hiddenChildren ??= new Set();
+      for (const id of root.children.keys()) root.hiddenChildren.add(id);
     }
-    owner.children.set(child.id, child);
+    owned.set(child.id, child);
     onCreated?.(child.id);
     this.emit();
 
@@ -2181,12 +2457,13 @@ export class SessionRegistry {
     if (signal?.aborted) cancel();
 
     const complete = this.completeChild(
-      owner,
+      root,
       child,
       ready,
       task,
       child.controller!.signal,
       () => cancelTask,
+      generation,
     ).finally(() => {
       child.settled = true;
       this.emit();
@@ -2195,7 +2472,8 @@ export class SessionRegistry {
     if (background) {
       void complete
         .then((result) => {
-          this.notifyChild(owner, child, {
+          if (owner !== root) return;
+          this.notifyChild(root, child, {
             type: "finished",
             status:
               child.failure || child.finishedStatus === "failure"
@@ -2212,11 +2490,12 @@ export class SessionRegistry {
         .catch((error: unknown) => {
           child.failure = reportUnexpected(error, "background subagent execution");
           this.emit();
-          this.notifyChild(owner, child, {
-            type: "finished",
-            status: "failure",
-            error: child.failure,
-          });
+          if (owner === root)
+            this.notifyChild(root, child, {
+              type: "finished",
+              status: "failure",
+              error: child.failure,
+            });
         });
       const created = await ready;
       signal?.removeEventListener("abort", cancel);
@@ -2224,12 +2503,7 @@ export class SessionRegistry {
         await complete;
         return created;
       }
-      if (
-        signal?.aborted ||
-        this.entries.get(ownerId) !== owner ||
-        owner.phase !== "open" ||
-        owner.replacing
-      ) {
+      if (signal?.aborted || !this.ownerCurrent(owner, root, generation)) {
         await this.closeExecution(child);
         return err(new CancelledError());
       }
@@ -2244,16 +2518,17 @@ export class SessionRegistry {
   }
 
   private async completeChild(
-    owner: OpenExecution,
+    root: OpenExecution,
     child: Execution,
     ready: NonNullable<Execution["ready"]>,
     task: string,
     signal: AbortSignal,
     cancellation: () => Promise<Result<void, ExpectedError>> | undefined,
+    generation: string,
   ): Promise<Result<string, ExpectedError>> {
     let result: Result<string, ExpectedError>;
     try {
-      result = await this.runChild(owner, child, ready, task, signal);
+      result = await this.runChild(root, child, ready, task, signal, generation);
     } catch (error) {
       try {
         const cleanup = await this.closeExecution(child);
@@ -2267,15 +2542,17 @@ export class SessionRegistry {
       throw error;
     }
     if (result.ok) child.finalOutput = result.value;
-    if (!result.ok && !(result.error instanceof CancelledError) && owner.phase === "open") {
+    if (!result.ok && !(result.error instanceof CancelledError) && root.phase === "open") {
       child.failure = result.error.message;
       this.emit();
     }
 
+    // A finished model turn does not prove subtree cleanup. Closing the child closes its
+    // remaining descendants too; only confirmed cleanup reports the outcome.
     const cleanup = await (cancellation() ?? this.closeExecution(child));
     if (!cleanup.ok) {
       child.failure = cleanup.error.message;
-      if (owner.phase === "open") {
+      if (root.phase === "open") {
         this.emit();
       }
 
@@ -2293,11 +2570,12 @@ export class SessionRegistry {
   }
 
   private async runChild(
-    owner: OpenExecution,
+    root: OpenExecution,
     child: Execution,
     ready: NonNullable<Execution["ready"]>,
     task: string,
-    signal?: AbortSignal,
+    signal: AbortSignal,
+    generation: string,
   ): Promise<Result<string, ExpectedError>> {
     const created = await ready;
     if (!created.ok) {
@@ -2312,11 +2590,11 @@ export class SessionRegistry {
       return key;
     }
 
-    const selected = this.requireOpen(owner.id);
+    const selected = this.requireOpen(root.id);
     if (!selected.ok) {
       return selected;
     }
-    if (signal?.aborted) {
+    if (signal.aborted || !this.ownerCurrent(child.owner ?? root, root, generation)) {
       return err(new CancelledError());
     }
     if (key.value) {
@@ -2331,7 +2609,7 @@ export class SessionRegistry {
     }
 
     child.unsubscribe = executor.subscribe(() => {
-      if (owner.phase === "open") {
+      if (root.phase === "open") {
         this.emit();
       }
     });
@@ -2346,22 +2624,74 @@ export class SessionRegistry {
     try {
       run = await executor.prompt(task);
     } finally {
-      child.runTiming = { startedAt, elapsedMs: Math.max(0, performance.now() - started) };
+      child.runTiming = {
+        startedAt,
+        elapsedMs: Math.max(0, performance.now() - started),
+      };
     }
     if (!run.ok) {
       return run;
     }
-    if (signal?.aborted) {
+    if (signal.aborted) {
       return err(new CancelledError());
     }
     if (executor.state.status === "failure") {
       return err(new AgentRunError(executor.state.error ?? "Subagent failed."));
+    }
+    // Each owner answers for its immediate children; their subtrees are covered recursively.
+    const live = [...(child.children?.values() ?? [])].filter((owned) => this.active(owned));
+    if (live.length) {
+      child.unfinished = true;
+      return err(
+        new DelegationError(
+          "DELEGATION_UNFINISHED",
+          `${child.name} finished while ${live.length} owned run(s) were still active. They were cancelled; the result is incomplete.`,
+        ),
+      );
     }
 
     return ok(executor.state.finalOutput ?? "");
   }
 
   private closeExecution(
+    execution: Execution,
+    reason: "quit" | "new" = "quit",
+  ): Promise<Result<void, ExpectedError>> {
+    if (execution.subtreeTask) {
+      return execution.subtreeTask;
+    }
+    execution.closing = true;
+
+    // Cancel the branch together. Each node's cleanup awaits only its own handle and its
+    // descendants', never an owner, so recursive cancellation cannot await itself.
+    const descendants = [...(execution.children?.values() ?? [])];
+    const task = collectCleanup(
+      [
+        this.closeNode(execution, reason),
+        ...descendants.map((child) => {
+          child.suppressNotifications = true;
+          return this.closeExecution(child, reason);
+        }),
+      ],
+      `Could not finish closing ${execution.name}`,
+    ).then((result): Result<void, ExpectedError> => {
+      if (!result.ok) {
+        delete execution.subtreeTask;
+      } else {
+        execution.closing = false;
+        this.emit();
+      }
+      return result.ok || result.error.errors.length !== 1 ? result : err(result.error.errors[0]!);
+    });
+    execution.subtreeTask = task;
+    void task.catch(() => {
+      delete execution.subtreeTask;
+    });
+
+    return task;
+  }
+
+  private closeNode(
     execution: Execution,
     reason: "quit" | "new" = "quit",
   ): Promise<Result<void, ExpectedError>> {
@@ -2377,18 +2707,17 @@ export class SessionRegistry {
     }
 
     const task = (async (): Promise<Result<void, ExpectedError>> => {
-      const created = await ready;
-      if (!created.ok) {
+      // Factory failures and defects are reported by create/runChild; no handle exists, so
+      // only the reservation is released here.
+      const created = await ready.catch(() => undefined);
+      if (!created?.ok) {
         execution.ready = undefined;
         execution.closedAt ??= Date.now();
         this.emit();
         return ok(undefined);
-      } // Factory failure is returned to create/runChild; no handle exists.
+      }
 
-      const scope =
-        execution.role === "subagent"
-          ? this.entries.values().find((entry) => entry.children.has(execution.id))?.scope
-          : undefined;
+      const scope = execution.role === "subagent" ? execution.root?.scope : undefined;
       // Creation cancelled by deletion may leave an SDK file that no record describes yet.
       const ownerScope = scope ?? this.entries.get(execution.id)?.scope;
       if (ownerScope && this.scopeFenced(ownerScope)) {
@@ -2411,7 +2740,10 @@ export class SessionRegistry {
       const closed = await created.value.close(reason);
       if (!closed.ok) {
         delete execution.cleanupTask;
-
+        if (scope) {
+          execution.failure = closed.error.message;
+          this.retireExecution(execution, scope, tree, [], created.value, archived);
+        }
         return closed;
       }
 
@@ -2427,9 +2759,11 @@ export class SessionRegistry {
 
         execution.output ??= created.value.state.output;
         const finalOutput = created.value.state.finalOutput;
-        if (finalOutput !== undefined) execution.finalOutput ??= finalOutput;
+        if (finalOutput !== undefined && !execution.unfinished)
+          execution.finalOutput ??= finalOutput;
         execution.finishedStatus =
           created.value.state.status === "working" ? null : created.value.state.status;
+        // Releases this node's root-wide reservation exactly once, after confirmed cleanup.
         execution.ready = undefined;
         delete execution.executor;
         this.emit();
@@ -2473,7 +2807,7 @@ export class SessionRegistry {
   private emit(): void {
     for (const entry of this.entries.values()) {
       const children = [...entry.children.values()];
-      const running = children.some((child) => child.ready !== undefined);
+      const running = [...this.descendants(entry)].some((child) => this.active(child));
       if (running || !children.length) {
         delete entry.childrenSettledAt;
         if (entry.childrenTimer) clearTimeout(entry.childrenTimer);
@@ -2517,7 +2851,9 @@ export async function validateHistory(file: string): Promise<Result<void, Expect
     const parsed = parseJson(line, "saved conversation");
     if (!parsed.ok) {
       return err(
-        new HistoryError("HISTORY_CORRUPT", parsed.error.message, { cause: parsed.error }),
+        new HistoryError("HISTORY_CORRUPT", parsed.error.message, {
+          cause: parsed.error,
+        }),
       );
     }
 

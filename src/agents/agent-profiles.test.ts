@@ -25,7 +25,13 @@ async function fixture() {
       join(directory, `${name}.md`),
       `---\nname: ${name}\ndescription: ${name} role\n${extra}---\nPerform the assigned role.\n`,
     );
-  return { root, agent, project, write, cleanup: () => rm(root, { recursive: true, force: true }) };
+  return {
+    root,
+    agent,
+    project,
+    write,
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
 }
 
 test("Project agent overrides require trust and preserve user models, skills and exact tool limits", async () => {
@@ -139,3 +145,35 @@ test.each(["coordinate-work", "subagent"])(
     }
   },
 );
+
+test("Delegation metadata accepts only a strict enabled boolean and keeps explicit false", async () => {
+  // Any profile name may opt in; there is no role-name privilege or target allowlist.
+  const app = await fixture();
+  try {
+    const directory = join(app.agent, "agents");
+    await app.write(directory, "anyone", "tools: []\ndelegation:\n  enabled: true\n");
+    await app.write(directory, "leaf", "delegation: { enabled: false }\n");
+    await app.write(directory, "plain");
+
+    const profiles = expectOk(discoverAgentProfiles(app.agent, app.project, false));
+    const byName = new Map(profiles.map((profile) => [profile.name, profile]));
+
+    expect(byName.get("anyone")?.delegation).toEqual({ enabled: true });
+    expect(byName.get("leaf")?.delegation).toEqual({ enabled: false });
+    expect(byName.get("plain")?.delegation).toBeUndefined();
+    for (const [index, value] of [
+      "delegation: true\n",
+      "delegation: {}\n",
+      'delegation: { enabled: "true" }\n',
+      "delegation: { enabled: true, allowedAgents: [worker] }\n",
+      "delegation: { enabled: true, maxDepth: 2 }\n",
+    ].entries()) {
+      await app.write(directory, `invalid${index}`, value);
+      expect(expectError(readAgentProfile(join(directory, `invalid${index}.md`))).code).toBe(
+        "RESOURCE_UNAVAILABLE",
+      );
+    }
+  } finally {
+    await app.cleanup();
+  }
+});

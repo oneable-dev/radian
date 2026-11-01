@@ -12,11 +12,24 @@ export type AgentProfile = {
   readonly thinking?: ModelEffort;
   readonly skills: readonly string[];
   readonly tools?: readonly string[];
+  /**
+   * Host-owned delegation opt-in. Omitted and explicit false both mean a leaf. The
+   * profile's tools restrict its own calls only; targets keep their own capabilities.
+   */
+  readonly delegation?: { readonly enabled: boolean };
   readonly prompt: string;
   readonly path: string;
 };
 
-const fields = new Set(["name", "description", "model", "thinking", "skills", "tools"]);
+const fields = new Set([
+  "name",
+  "description",
+  "model",
+  "thinking",
+  "skills",
+  "tools",
+  "delegation",
+]);
 const efforts = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function readDefinition(path: string): Result<ReturnType<typeof parseFrontmatter>, ResourceError> {
@@ -77,6 +90,17 @@ export function readAgentProfile(path: string): Result<AgentProfile, ResourceErr
     data.tools.some((name: string) => !/^[a-zA-Z0-9_*][a-zA-Z0-9_.*-]*$/u.test(name))
   )
     return invalid("tools accepts names or '*' patterns, not default-selection modifiers.");
+  const delegation: unknown = data.delegation;
+  if (delegation !== undefined) {
+    if (!delegation || typeof delegation !== "object" || Array.isArray(delegation))
+      return invalid("delegation must be a mapping such as { enabled: true }.");
+    const keys = Object.keys(delegation);
+    const unsupported = keys.filter((key) => key !== "enabled");
+    if (unsupported.length)
+      return invalid(`Unsupported delegation fields: ${unsupported.join(", ")}.`);
+    if (!("enabled" in delegation) || typeof delegation.enabled !== "boolean")
+      return invalid("delegation.enabled must be true or false.");
+  }
   return ok({
     name,
     description: data.description.trim(),
@@ -84,6 +108,11 @@ export function readAgentProfile(path: string): Result<AgentProfile, ResourceErr
     ...(data.thinking !== undefined ? { thinking: data.thinking as ModelEffort } : {}),
     skills: (data.skills ?? []) as string[],
     ...(data.tools !== undefined ? { tools: data.tools as string[] } : {}),
+    ...(delegation !== undefined
+      ? {
+          delegation: { enabled: (delegation as { enabled: boolean }).enabled },
+        }
+      : {}),
     prompt: body,
     path,
   });
@@ -175,4 +204,8 @@ export function roleInstructions(
     );
   }
   return ok(parts.join("\n\n"));
+}
+
+export function delegates(profile: AgentProfile | undefined): boolean {
+  return profile?.delegation?.enabled === true;
 }

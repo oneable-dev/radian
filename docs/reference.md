@@ -1901,9 +1901,11 @@ local-service platforms for this implementation.
 Changing selection/search never calls SDK `switchSession()`, aborts an execution, or changes
 `process.cwd()`. Nonselected sessions continue streaming and publishing snapshots.
 The `radian-subagent` tool creates an owned SDK child in the same worktree with a fresh conversation.
-Children cannot delegate further. Finished children release execution resources while preserving
-saved histories and status-query results. All child status rows disappear together ten seconds after
-the last child settles. A later launch starts a new visible batch without resurrecting hidden rows.
+Profiles explicitly opting into `delegation.enabled` may supervise their own children. Ordinary
+children remain leaves and host-designated planning children can never delegate. Finished children
+release execution resources while preserving saved histories and status-query results. All child
+status rows disappear together ten seconds after the entire visible subtree settles. A later launch
+starts a new visible batch without resurrecting hidden rows.
 Default and configured Pi extensions, context files, skills and prompt templates use SDK discovery.
 Package component viewports are isolated from the workbench terminal; extension-specific lifecycle
 behavior still belongs to the package. Cache warming is disabled.
@@ -1912,15 +1914,29 @@ behavior still belongs to the package. Cache warming is disabled.
 
 Define Markdown profiles in `~/.pi/agent/agents/*.md`. Trusted project `.pi/agents/*.md` files override
 same-named user profiles, with nearer project directories taking precedence. Profiles use YAML
-frontmatter (`name`, `description`, optional exact `provider/model` in `model`, `thinking`, `skills`
-and `tools`) and role instructions in the body. Unknown fields and invalid definitions fail explicitly.
+frontmatter (`name`, `description`, optional exact `provider/model` in `model`, `thinking`, `skills`,
+`tools` and `delegation`) and role instructions in the body. Unknown fields and invalid definitions
+fail explicitly. Delegation is an explicit boolean capability, independent of the role name:
+
+```yaml
+delegation:
+  enabled: true
+```
+
+Omitting `delegation` or setting `enabled: false` preserves leaf behavior. Only the `enabled` key is
+supported; target allowlists such as `allowedAgents` are not part of this contract. An authorized
+coordinator may target any profile in the host's trusted catalog. A read-only coordinator can launch
+a write-capable worker: its personal execution tools are not the descendant permission ceiling.
+This is delegated authority, not transitive read-only confinement. Launch capabilities are host-owned
+and cannot be expanded by tool arguments or silently upgraded through a live profile reload.
 Legacy `advertise`, `systemPromptMode`, `inherit*` and `extensions` profile fields are not supported:
 profiles are advertised by default; Pi's base prompt, common/project context and activated extensions
 remain available without per-profile filesystem paths. Role instructions append to the normal prompt.
 
 Radian appends its parent/child API protocol from `src/agents/subagent-instructions.ts`, independently
 of profile instructions and installed skills. Parent guidance covers the coordination tool and internal
-event semantics; child guidance covers supervisor reporting and the no-delegation boundary. The normal
+event semantics; child guidance covers supervisor reporting, scoped coordination where authorized,
+and the leaf/planning boundaries. The normal
 Pi base prompt, append files and context remain intact. An optional, host-independent `subagent` skill
 can provide collaboration principles; no skill name or installation is required for the runtime API.
 
@@ -1929,16 +1945,24 @@ available skills stay discoverable for on-demand reading. A skill with `metadata
 is omitted from child discovery, including required-role skill resolution. This is catalog scoping,
 not a filesystem sandbox. A `tools` list is an SDK-enforced allowlist of exact tool names or `*`
 patterns, also applying to dynamically activated extension tools. Default-selection modifiers such as
-`+write` are rejected. Omitting the field uses the SDK defaults; `[]` allows only the child reporting
-protocol. Neither tool restrictions nor role instructions are an OS sandbox, particularly if `bash`
-is allowed. The `radian-supervisor` protocol tool is always available to owned children.
+`+write` are rejected. Omitting the field uses the SDK defaults; `[]` allows child reporting plus
+host-owned coordination when `delegation.enabled` grants it. Neither tool restrictions nor role
+instructions are an OS sandbox, particularly if `bash` is allowed. The `radian-supervisor` protocol
+tool is always available to owned children. Generic MCP proxies can call their underlying server
+without a separate SDK tool invocation; allowing a proxy is not a per-server-tool permission boundary.
+Use explicitly exposed direct tools when a role needs a restricted set of MCP operations.
 
-Parent tool actions:
+Root and authorized coordinator tool actions (control is limited to directly owned runs):
 
 - `list`: discover role profiles without launching work.
-- `spawn { agent, task, async? }`: asynchronous by default, returning a run ID. At most five runs may
-  be active per parent and 128 may be retained per conversation. `async: false` waits for output, is
-  disallowed alongside other active children, and cannot answer child questions.
+- `spawn { agent, task, async? }`: asynchronous by default, returning a run ID. The root has depth 0;
+  descendants may reach depth 3. At most five descendants may be active and 128 runs retained across
+  the entire root tree, not separately per coordinator. Initializing, waiting, supervising and
+  cleaning-up descendants consume active capacity until settlement; the root does not. Creation
+  reserves capacity before awaiting asynchronous setup. A limit violation returns a typed error
+  immediately, without a hidden queue. `async: false` waits for a leaf's output, is disallowed alongside
+  other active owned children, and cannot answer child questions. Delegation-enabled targets cannot
+  be launched synchronously, because their owner must remain able to supervise the new subtree.
 - `status { id? }`: read owned tasks, observed active tools, progress, pending questions, timing and
   saved-session paths. `output` contains only the settled final assistant response; `recentOutput`
   contains the separately bounded inspection tail. Failed, cancelled and legacy runs without an
@@ -1961,10 +1985,71 @@ Reports are coalesced and revalidated at the parent's idle boundary. State alrea
 `status`/`wait`, answered questions, superseded progress and intentionally stopped work do not wake
 the parent again. Genuinely unseen questions and outcomes still wake it using a hidden, explicitly
 internal SDK custom message; a batch is delivered once without becoming user transcript JSON.
-No sibling or unrelated-session channel is provided. Parent closure, replacement,
-interruption and service shutdown release outstanding questions and clean up owned executions.
-After a service restart, unfinished child records are historical, not automatically resumed jobs.
+No sibling or unrelated-session channel is provided. Each level answers its own children's questions;
+escalation is an explicit supervisor ask to its immediate owner, not automatic user notification.
+A coordinator must supervise and wait until its descendants settle before returning a final answer.
+A premature final response with live descendants fails explicitly and cleans up the owned subtree
+rather than reporting success or orphaning work. Stopping a branch cleans up that branch without
+cancelling siblings. Root closure, replacement, interruption and service shutdown recursively release
+outstanding questions and clean up owned executions. Cancellation or cleanup does not roll back
+already accepted actions. After a service restart, descendant records retain ancestry as historical
+records, not automatically resumed jobs; old flat histories remain readable. Root snapshots expose
+a flattened ancestry-aware summary without granting arbitrary descendant control to root tools.
 The legacy `radian_subagent` spelling remains readable in stored analytics, but is not an active tool.
+
+#### Domain-role examples and global rollout
+
+[`resources/agents/`](../resources/agents/) contains opt-in examples, not automatically installed
+defaults. They separate domain judgment from bounded execution and independent QA:
+
+| Role         | Example model                   | Effort  | Delegates |
+| ------------ | ------------------------------- | ------- | --------- |
+| Product Lead | `openai-codex/gpt-6-astra`      | `xhigh` | Yes       |
+| PM           | `openai-codex/gpt-6.1-sol`      | `high`  | No        |
+| Tech Lead    | `claude-code/claude-opus-5-5`   | `xhigh` | Yes       |
+| Engineer     | `openai-codex/gpt-6.1-sol`      | `high`  | No        |
+| UI/UX Lead   | `claude-code/claude-opus-5-5`   | `xhigh` | Yes       |
+| Designer     | `claude-code/claude-sonnet-5-5` | `high`  | No        |
+| QA           | `openai-codex/gpt-6-astra`      | `high`  | No        |
+
+These are starting configurations, not measured superiority claims. Check exact model IDs, supported
+effort, required skills and registered tools before installing them. If Sonnet 5.5 is unavailable,
+an alternative such as `openai-codex/gpt-6.1-sol` at `high` requires an explicit selection by the user;
+do not silently substitute a role's model. Provider API pricing does not necessarily describe subscription usage.
+Parent model defaults remain user settings; this example arrangement uses Astra at `xhigh`.
+
+Leads provide purpose, inputs, owned files/artifacts, constraints, expected outputs and observable
+acceptance criteria. Workers research and complete their domain work, self-verify and escalate
+ambiguity or cross-domain changes. Leads review the actual artifacts and evidence; the root resolves
+cross-domain conflicts and performs final integration review. Roles are activated only when useful,
+not as mandatory stages for every task. Waiting coordinators count toward capacity, so three Leads
+and two workers already fill all five active slots; sequence work on capacity errors.
+
+QA reports independently to the root. It checks scenarios before work, verifies actual user flows
+after work, supplies expected/actual results, reproduction steps and evidence, and retests fixes.
+It does not silently modify product code or production data. Its example reuses the existing
+`mcp__browser_use` server proxy without changing MCP configuration or requiring `directTools`.
+The proxy can technically invoke every tool on that server; avoiding `browser_extract_content`
+(which uses another model), `retry_with_browser_use_agent` and `browser_close_all` is an operational
+instruction, not enforced per-tool filtering. The profile does not grant the all-server `mcp` gateway
+or unrelated namespaces. Ask the owner for missing tool schemas and report unavailable server access
+or authentication as blocked. Browser access does not imply computer-use support. Verify only with
+tools and credentials actually available.
+
+All roles must acquire one shared browser/desktop owner through the root coordinator and explicitly
+hand off or release it. This serialization is an operational contract, not a runtime lease or enforced
+state isolation. Use disposable test state, preserve unrelated tabs/sessions and distinguish observed
+screenshots/HTML from measured layout or computed styles. Report unavailable or unperformed checks.
+
+Before global rollout, finish relevant work and ensure all consuming runtimes advertise the
+`recursive-delegation` capability; old strict parsers reject delegation metadata. Preserve user changes and back up affected configuration outside
+the discoverable `agents/*.md` directory. Edit the authoritative source of managed symlinks, not the
+Nix store or generated links. Update conflicting global instructions and command bindings, validate
+new profiles/model/effort/tools, then remove superseded profiles only after their active jobs and
+references have been migrated. Removing `commandAgents.plan` restores parent-owned planning; binding
+a command to a deleted profile fails explicitly. Preserve credentials, histories and unrelated settings.
+
+#### Delegation records and cleanup
 
 The main transcript projects one foldable `[subagent]` delegation record from each exact launch receipt.
 It retains the task, meaningful questions/replies, guidance, final response and failures, updating the
