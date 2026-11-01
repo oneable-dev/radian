@@ -175,3 +175,56 @@ test("Terminal supervisors never automatically execute worktree Bun preloads or 
     await fixture.cleanup();
   }
 });
+
+test("Destroying a worktree stops its shells, owned jobs and pending launches only", async () => {
+  // Isolated clean shells; the background job is owned by the removed worktree's shell.
+  const fixture = await createWorktreeFixture();
+  const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);
+  const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!.id;
+  const feature = fixture.repository.worktrees.find((tree) => tree.path === fixture.feature)!.id;
+  let reader: Awaited<ReturnType<typeof watch>> | undefined;
+  let survivor: Awaited<ReturnType<typeof watch>> | undefined;
+  try {
+    const removed = expectOk(await sessions.create(main, { cols: 80, rows: 12 }));
+    const sibling = expectOk(await sessions.create(feature, { cols: 80, rows: 12 }));
+    const anchor = sessions.infos.find((info) => info.id === removed)!.pid;
+    reader = await watch(sessions, removed);
+    await reader.seen("radian$");
+    reader.input("sleep 300 & echo $! > deleted-job.txt\r");
+    const jobFile = join(fixture.main, "deleted-job.txt");
+    await until(
+      async () =>
+        (
+          await Bun.file(jobFile)
+            .text()
+            .catch(() => "")
+        ).trim() !== "",
+    );
+    const job = Number((await Bun.file(jobFile).text()).trim());
+    expect(pidAlive(job)).toBe(true);
+
+    // A launch still in its supervisor handshake must not survive the deletion.
+    const pending = sessions.create(main, { cols: 80, rows: 12 });
+    expectOk(await sessions.destroyWorktrees(new Set([main])));
+
+    expect((await pending).ok).toBe(false);
+    expect(pidAlive(job)).toBe(false);
+    expect(pidAlive(anchor)).toBe(false);
+    expect(sessions.infos.map((info) => info.id)).toEqual([sibling]);
+    expect(sessions.retainedWorktreeIds).toEqual(new Set([feature]));
+    expect(sessions.closingCount).toBe(0);
+    expect((await sessions.create(main, { cols: 80, rows: 12 })).ok).toBe(false);
+
+    survivor = await watch(sessions, sibling);
+    survivor.input("printf 'sibling-alive\\n'\r");
+    await survivor.seen("sibling-alive");
+
+    expectOk(sessions.releaseWorktrees(new Set([main])));
+    expectOk(await sessions.create(main, { cols: 80, rows: 12 }));
+  } finally {
+    await reader?.disconnect().catch(() => {});
+    await survivor?.disconnect();
+    expectOk(await sessions.stop());
+    await fixture.cleanup();
+  }
+}, 30000);

@@ -5,11 +5,22 @@ export type SelectionState = {
   readonly sessions: Readonly<Record<string, string>>;
 };
 
+/** Explicitly deleted workspace scopes, from the daemon's deletion summary. */
+export type SelectionDeletion = {
+  readonly worktreeIds: ReadonlySet<string>;
+  readonly sessionIds: ReadonlySet<string>;
+};
+
 export class WorkspaceSelection {
   private repositories: readonly Repository[];
   private selectedWorktreeId: string | null;
   private readonly lastSessions = new Map<string, string>();
   private readonly listeners = new Set<() => void>();
+  // Deleted sessions never return, even when their worktree path is recreated.
+  private readonly deletedSessions = new Set<string>();
+  // Deleted worktrees not yet reconciled with the next snapshot. A row with the same ID in that
+  // snapshot is a recreated generation, not a survivor of the deleted one.
+  private invalidatedWorktrees = new Set<string>();
 
   constructor(repositories: readonly Repository[]) {
     this.repositories = repositories;
@@ -36,20 +47,17 @@ export class WorkspaceSelection {
     }
 
     const remembered = this.lastSessions.get(worktree.id);
+    const sessions = this.liveSessions(worktree);
 
-    return (
-      worktree.sessions.find((session) => session.id === remembered)?.id ??
-      worktree.sessions[0]?.id ??
-      null
-    );
+    return sessions.find((session) => session.id === remembered)?.id ?? sessions[0]?.id ?? null;
   }
 
   get state(): SelectionState {
     const sessions: Record<string, string> = {};
     for (const tree of this.repositories.flatMap((repo) => repo.worktrees)) {
+      const live = this.liveSessions(tree);
       const selected =
-        tree.sessions.find((session) => session.id === this.lastSessions.get(tree.id)) ??
-        tree.sessions[0];
+        live.find((session) => session.id === this.lastSessions.get(tree.id)) ?? live[0];
       if (selected) {
         sessions[tree.id] = selected.id;
       }
@@ -62,7 +70,11 @@ export class WorkspaceSelection {
     this.lastSessions.clear();
     for (const tree of this.repositories.flatMap((repo) => repo.worktrees)) {
       const id = state.sessions[tree.id];
-      if (id && tree.sessions.some((session) => session.id === id)) {
+      if (
+        id &&
+        !this.deletedSessions.has(id) &&
+        tree.sessions.some((session) => session.id === id)
+      ) {
         this.lastSessions.set(tree.id, id);
       }
     }
@@ -96,7 +108,10 @@ export class WorkspaceSelection {
     const worktree = this.repositories
       .flatMap((repo) => repo.worktrees)
       .find((tree) => tree.id === worktreeId);
-    if (!worktree?.sessions.some((session) => session.id === sessionId)) {
+    if (
+      this.deletedSessions.has(sessionId) ||
+      !worktree?.sessions.some((session) => session.id === sessionId)
+    ) {
       return;
     }
 
@@ -105,13 +120,38 @@ export class WorkspaceSelection {
     this.emit();
   }
 
+  /**
+   * Discards remembered selections of explicitly deleted scopes without notifying listeners.
+   * Call `replaceSnapshot` next: it moves an affected selected worktree to a survivor and treats
+   * a row with a deleted ID as a new generation. Cold or missing rows are not deletions.
+   */
+  forget(deletion: SelectionDeletion): void {
+    for (const id of deletion.sessionIds) {
+      this.deletedSessions.add(id);
+    }
+    for (const [worktreeId, sessionId] of this.lastSessions) {
+      if (deletion.worktreeIds.has(worktreeId) || this.deletedSessions.has(sessionId)) {
+        this.lastSessions.delete(worktreeId);
+      }
+    }
+    for (const id of deletion.worktreeIds) {
+      this.invalidatedWorktrees.add(id);
+    }
+  }
+
   // The host supplies display snapshots, including optimistic removals. Removing
   // an item here never aborts an agent or deletes its persisted history.
   replaceSnapshot(
     repositories: readonly Repository[],
     restoredSessions: Readonly<Record<string, string>> = {},
   ): void {
+    const invalidated = this.invalidatedWorktrees;
+    this.invalidatedWorktrees = new Set();
     for (const previous of this.repositories.flatMap((repo) => repo.worktrees)) {
+      if (invalidated.has(previous.id)) {
+        continue;
+      }
+
       const next = repositories
         .flatMap((repo) => repo.worktrees)
         .find((tree) => tree.id === previous.id);
@@ -140,6 +180,7 @@ export class WorkspaceSelection {
       const saved = restoredSessions[tree.id];
       if (
         saved &&
+        !this.deletedSessions.has(saved) &&
         !tree.sessions.some((session) => session.id === this.lastSessions.get(tree.id)) &&
         tree.sessions.some((session) => session.id === saved)
       ) {
@@ -147,12 +188,48 @@ export class WorkspaceSelection {
       }
     }
 
+    const previousOrder = this.repositories.flatMap((repo) =>
+      repo.worktrees.map((tree) => tree.id),
+    );
     this.repositories = repositories;
-    if (!this.worktree) {
-      this.selectedWorktreeId = repositories.flatMap((repo) => repo.worktrees)[0]?.id ?? null;
+    const selected = this.selectedWorktreeId;
+    if (!this.worktree || (selected !== null && invalidated.has(selected))) {
+      this.selectedWorktreeId = this.fallbackWorktree(previousOrder, selected, invalidated);
     }
 
     this.emit();
+  }
+
+  // Next surviving row in the previous display order, then the previous survivor, then the
+  // first new row. Recreated rows of deleted worktrees count as new.
+  private fallbackWorktree(
+    previousOrder: readonly string[],
+    selected: string | null,
+    invalidated: ReadonlySet<string>,
+  ): string | null {
+    const nextOrder = this.repositories.flatMap((repo) => repo.worktrees.map((tree) => tree.id));
+    const present = new Set(nextOrder);
+    const survives = (id: string) => present.has(id) && !invalidated.has(id);
+    const index = selected === null ? -1 : previousOrder.indexOf(selected);
+    if (index >= 0) {
+      const following = previousOrder.slice(index + 1).find(survives);
+      const preceding = previousOrder.slice(0, index).findLast(survives);
+      const survivor = following ?? preceding;
+      if (survivor) {
+        return survivor;
+      }
+    }
+
+    const previous = new Set(previousOrder.filter(survives));
+
+    return nextOrder.find((id) => !previous.has(id)) ?? nextOrder[0] ?? null;
+  }
+
+  // A snapshot can still list a deleted session briefly; it is never selected again.
+  private liveSessions(worktree: Worktree): Worktree["sessions"] {
+    return this.deletedSessions.size
+      ? worktree.sessions.filter((session) => !this.deletedSessions.has(session.id))
+      : worktree.sessions;
   }
 
   private rememberSession(): void {

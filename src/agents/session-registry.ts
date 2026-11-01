@@ -156,6 +156,19 @@ export type SessionRecord = {
   readonly managed?: boolean;
 };
 
+/**
+ * Minimal metadata of a conversation owned by a removed worktree scope. It identifies files
+ * for deletion cleanup only and is never restorable checkpoint content.
+ */
+export type SessionDeletionCandidate = {
+  readonly worktreeId: string;
+  readonly sessionId: string;
+  readonly role: "main" | "subagent";
+  readonly conversationId: string;
+  readonly sessionFile?: string;
+  readonly managed: boolean;
+};
+
 // Creation is an exception-based SDK boundary. The registry converts only classified failures.
 export type SessionFactory = (context: SessionContext) => Promise<SessionExecutor>;
 
@@ -216,6 +229,14 @@ export class SessionRegistry {
   private shuttingDown = false;
   private uiActive = false;
   private readonly replacements = new Set<Promise<Result<void, ExpectedError>>>();
+  // Deleted worktree scopes reject new work. Epochs advance on each fence so work started
+  // for an old scope cannot complete into a scope released for a recreated directory.
+  private readonly fencedWorktrees = new Set<string>();
+  private readonly worktreeEpochs = new Map<string, number>();
+  private readonly scopedOperations = new Map<Promise<unknown>, string>();
+  private readonly deletionCandidates = new Map<string, Map<string, SessionDeletionCandidate>>();
+  // Executors of removed scopes whose close failed after they lost their registry entry.
+  private readonly strandedExecutors = new Map<SessionExecutor, string>();
 
   constructor(
     private readonly repositories: RepositorySource,
@@ -271,10 +292,236 @@ export class SessionRegistry {
   }
 
   get retainedWorktreeIds(): ReadonlySet<string> {
-    return new Set(
-      [...this.entries.values()].flatMap((entry) =>
+    return new Set([
+      ...[...this.entries.values()].flatMap((entry) =>
         entry.scope.kind === "code" ? [entry.scope.worktreeId] : [],
       ),
+      ...this.scopedOperations.values(),
+      ...this.strandedExecutors.values(),
+    ]);
+  }
+
+  /**
+   * Synchronously blocks new and pending work for deleted worktree scopes. Idempotent.
+   * CHAT and unrelated worktrees are unaffected.
+   */
+  fenceWorktrees(worktreeIds: ReadonlySet<string>): void {
+    let changed = false;
+    for (const id of worktreeIds) {
+      if (this.fencedWorktrees.has(id)) {
+        continue;
+      }
+
+      this.fencedWorktrees.add(id);
+      this.worktreeEpochs.set(id, (this.worktreeEpochs.get(id) ?? 0) + 1);
+      changed = true;
+    }
+    if (changed) {
+      this.emit();
+    }
+  }
+
+  /**
+   * Fences and terminates every execution of the given worktree scopes, including owned
+   * children and pending creation or replacement. Their records are no longer checkpointed;
+   * every conversation they owned, including ones created after the fence, is returned as a
+   * deletion candidate once all scoped work has drained. Idempotent; on failure the remaining
+   * executions stay retained for retry and `worktreeDeletionCandidates` reports partial
+   * inventory.
+   */
+  async destroyWorktrees(
+    worktreeIds: ReadonlySet<string>,
+  ): Promise<Result<readonly SessionDeletionCandidate[], ExpectedError>> {
+    this.fenceWorktrees(worktreeIds);
+    this.moveRetiredToCandidates(worktreeIds);
+
+    // Pending operations may start closes or replacements of their own; drain until stable.
+    while (true) {
+      const pending = [...this.scopedOperations]
+        .filter(([, id]) => worktreeIds.has(id))
+        // Each operation reports its own outcome to its caller; deletion only waits for it.
+        .map(([task]) => task.then(settledOk, settledOk));
+      const closing = [...this.entries.values()]
+        .filter((entry) => entry.scope.kind === "code" && worktreeIds.has(entry.scope.worktreeId))
+        .map((entry) => this.close(entry.id));
+      const stranded = [...this.strandedExecutors]
+        .filter(([, id]) => worktreeIds.has(id))
+        .map(([executor]) => this.closeStranded(executor));
+      if (!pending.length && !closing.length && !stranded.length) {
+        break;
+      }
+
+      const result = await collectCleanup(
+        [...closing, ...stranded, ...pending],
+        "Could not stop every session of the removed worktrees.",
+      );
+      this.moveRetiredToCandidates(worktreeIds);
+      if (!result.ok) {
+        return result;
+      }
+    }
+
+    return ok(this.worktreeDeletionCandidates(worktreeIds));
+  }
+
+  /** Conversations of removed scopes observed so far, for cleanup inventory only. */
+  worktreeDeletionCandidates(worktreeIds: ReadonlySet<string>): SessionDeletionCandidate[] {
+    return [...worktreeIds].flatMap((id) => [...(this.deletionCandidates.get(id)?.values() ?? [])]);
+  }
+
+  /**
+   * Opens a new scope generation for worktree IDs whose previous generation was destroyed,
+   * for example a directory recreated at the same path. Call only after the deletion
+   * candidates were purged; they are forgotten here. Refuses while old work remains.
+   */
+  releaseWorktrees(worktreeIds: ReadonlySet<string>): Result<void, ExpectedError> {
+    const retained = this.retainedWorktreeIds;
+    if ([...worktreeIds].some((id) => retained.has(id))) {
+      return err(
+        new SessionError(
+          "SESSION_BUSY",
+          "Sessions of the removed worktree are still stopping; the scope was not released.",
+        ),
+      );
+    }
+
+    this.moveRetiredToCandidates(worktreeIds);
+    for (const id of worktreeIds) {
+      this.fencedWorktrees.delete(id);
+      this.deletionCandidates.delete(id);
+    }
+
+    this.emit();
+
+    return ok(undefined);
+  }
+
+  private moveRetiredToCandidates(worktreeIds: ReadonlySet<string>): void {
+    for (const [key, record] of this.retired) {
+      if (
+        record.scope?.kind !== "chat" &&
+        record.worktreeId &&
+        worktreeIds.has(record.worktreeId)
+      ) {
+        this.retired.delete(key);
+        this.noteRecordCandidate(record);
+      }
+    }
+  }
+
+  private noteRecordCandidate(record: SessionRecord): void {
+    if (record.scope?.kind === "chat" || !record.worktreeId) {
+      return;
+    }
+
+    this.noteCandidate({
+      worktreeId: record.worktreeId,
+      sessionId: record.id,
+      role: record.role ?? "main",
+      conversationId: record.state.conversationId ?? record.id,
+      ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+      managed: record.managed ?? false,
+    });
+    for (const child of record.ownedSubagents ?? []) {
+      if (child.sessionFile) {
+        this.noteCandidate({
+          worktreeId: record.worktreeId,
+          sessionId: child.id,
+          role: "subagent",
+          conversationId: child.id,
+          sessionFile: child.sessionFile,
+          managed: true,
+        });
+      }
+    }
+  }
+
+  private noteExecutorCandidate(
+    scope: SessionScope,
+    sessionId: string,
+    role: "main" | "subagent",
+    executor: SessionExecutor,
+    managed: boolean,
+  ): void {
+    if (scope.kind !== "code") {
+      return;
+    }
+
+    const sessionFile = executor.sessionFile;
+    this.noteCandidate({
+      worktreeId: scope.worktreeId,
+      sessionId,
+      role,
+      conversationId: executor.savedSessionId,
+      ...(sessionFile ? { sessionFile } : {}),
+      managed,
+    });
+  }
+
+  private noteCandidate(candidate: SessionDeletionCandidate): void {
+    let candidates = this.deletionCandidates.get(candidate.worktreeId);
+    if (!candidates) {
+      candidates = new Map();
+      this.deletionCandidates.set(candidate.worktreeId, candidates);
+    }
+
+    // Child records from owner snapshots may precede the child's own executor observation.
+    const key = candidate.sessionFile ?? `${candidate.role}:${candidate.conversationId}`;
+    const previous = candidates.get(key);
+    candidates.set(
+      key,
+      previous && candidate.role === "subagent" && candidate.conversationId === candidate.sessionId
+        ? previous
+        : candidate,
+    );
+  }
+
+  private closeStranded(executor: SessionExecutor): Promise<Result<void, ExpectedError>> {
+    return executor.close().then((closed) => {
+      if (closed.ok) {
+        this.strandedExecutors.delete(executor);
+      }
+
+      return closed;
+    });
+  }
+
+  // A replacement handle that failed to close outside a removed scope keeps the existing
+  // error-reporting contract; inside one it stays retained so deletion can retry it.
+  private strandIfRemoved(scope: SessionScope, executor: SessionExecutor): void {
+    if (scope.kind === "code" && this.scopeFenced(scope)) {
+      this.strandedExecutors.set(executor, scope.worktreeId);
+    }
+  }
+
+  private scopeFenced(scope: SessionScope): boolean {
+    return scope.kind === "code" && this.fencedWorktrees.has(scope.worktreeId);
+  }
+
+  private scopeEpoch(scope: SessionScope): number {
+    return scope.kind === "code" ? (this.worktreeEpochs.get(scope.worktreeId) ?? 0) : 0;
+  }
+
+  private scopeCurrent(scope: SessionScope, epoch: number): boolean {
+    return !this.scopeFenced(scope) && this.scopeEpoch(scope) === epoch;
+  }
+
+  private trackScoped<T>(scope: SessionScope, task: Promise<T>): Promise<T> {
+    if (scope.kind === "code") {
+      this.scopedOperations.set(task, scope.worktreeId);
+      const untrack = () => {
+        this.scopedOperations.delete(task);
+      };
+      void task.then(untrack, untrack);
+    }
+
+    return task;
+  }
+
+  private scopeRemoved(): SessionError {
+    return new SessionError(
+      "SESSION_NOT_OPEN",
+      "This worktree was removed; no session work was accepted.",
     );
   }
 
@@ -528,9 +775,15 @@ export class SessionRegistry {
     );
   }
 
-  // Retain closed records only until the shared store confirms persistence.
+  // Retain closed records only until the shared store confirms persistence. Removed
+  // worktree scopes are never checkpointed again, so late saves cannot resurrect them.
   get checkpointRecords(): readonly SessionRecord[] {
-    return [...this.retired.values(), ...this.records];
+    return [...this.retired.values(), ...this.records].filter(
+      (record) =>
+        record.scope?.kind === "chat" ||
+        !record.worktreeId ||
+        !this.fencedWorktrees.has(record.worktreeId),
+    );
   }
 
   acknowledgeCheckpoint(records: readonly SessionRecord[]): void {
@@ -554,7 +807,11 @@ export class SessionRegistry {
       ),
       ownedSubagents: this.ownedRecords(entry),
     };
-    this.retired.set(sessionRecordKey(record), record);
+    if (this.scopeFenced(entry.scope)) {
+      this.noteRecordCandidate(record);
+    } else {
+      this.retired.set(sessionRecordKey(record), record);
+    }
     return record;
   }
 
@@ -621,7 +878,11 @@ export class SessionRegistry {
       subagents,
     };
 
-    this.retired.set(sessionRecordKey(record), record);
+    if (this.scopeFenced(scope)) {
+      this.noteRecordCandidate(record);
+    } else {
+      this.retired.set(sessionRecordKey(record), record);
+    }
 
     return record;
   }
@@ -651,10 +912,28 @@ export class SessionRegistry {
     return [...owned, ...(entry.executor?.state.externalSubagents ?? [])];
   }
 
-  async restore(record: SessionRecord): Promise<Result<void, ExpectedError>> {
+  restore(record: SessionRecord): Promise<Result<void, ExpectedError>> {
     if (record.lifecycle === "closed" || record.role === "subagent") {
-      return ok(undefined);
+      return Promise.resolve(ok(undefined));
     }
+
+    const scope: SessionScope =
+      record.scope?.kind === "chat"
+        ? { kind: "chat" }
+        : { kind: "code", worktreeId: record.worktreeId! };
+
+    return this.trackScoped(scope, this.restoreOnce(record, scope));
+  }
+
+  private async restoreOnce(
+    record: SessionRecord,
+    scope: SessionScope,
+  ): Promise<Result<void, ExpectedError>> {
+    if (this.scopeFenced(scope)) {
+      return err(this.scopeRemoved());
+    }
+
+    const epoch = this.scopeEpoch(scope);
 
     const existence = await capture(async () =>
       record.sessionFile ? Bun.file(record.sessionFile).exists() : false,
@@ -677,10 +956,13 @@ export class SessionRegistry {
       }
     }
 
+    // A record read for a removed scope generation must not reopen in its replacement.
+    if (!this.scopeCurrent(scope, epoch)) {
+      return err(this.scopeRemoved());
+    }
+
     const created = await this.createScoped(
-      record.scope?.kind === "chat"
-        ? { kind: "chat" }
-        : { kind: "code", worktreeId: record.worktreeId! },
+      scope,
       existence.value ? record.sessionFile : undefined,
       record,
     );
@@ -780,7 +1062,15 @@ export class SessionRegistry {
     return this.createScoped({ kind: "chat" }, sessionFile, identity);
   }
 
-  private async createScoped(
+  private createScoped(
+    scope: SessionScope,
+    sessionFile?: string,
+    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+  ): Promise<Result<string, ExpectedError>> {
+    return this.trackScoped(scope, this.createScopedOnce(scope, sessionFile, identity));
+  }
+
+  private async createScopedOnce(
     scope: SessionScope,
     sessionFile?: string,
     identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
@@ -791,6 +1081,11 @@ export class SessionRegistry {
     if (this.shuttingDown) {
       return err(this.stopping());
     }
+    if (this.scopeFenced(scope)) {
+      return err(this.scopeRemoved());
+    }
+
+    const epoch = this.scopeEpoch(scope);
 
     const worktree =
       scope.kind === "code"
@@ -808,6 +1103,9 @@ export class SessionRegistry {
     }
     if (this.shuttingDown) {
       return err(this.stopping());
+    }
+    if (!this.scopeCurrent(scope, epoch)) {
+      return err(this.scopeRemoved());
     }
 
     const requestedFile = canonical.value;
@@ -861,7 +1159,7 @@ export class SessionRegistry {
 
     let result: Result<string, ExpectedError>;
     try {
-      result = await this.initialize(entry, ready, requestedFile);
+      result = await this.initialize(entry, ready, requestedFile, epoch);
     } catch (error) {
       // Unexpected bugs still need cleanup; preserve both the original and any cleanup exception.
       if (entry.phase === "creating" && !entry.executor) {
@@ -895,7 +1193,8 @@ export class SessionRegistry {
   private async initialize(
     entry: OpenExecution,
     ready: NonNullable<Execution["ready"]>,
-    requestedFile?: string,
+    requestedFile: string | undefined,
+    epoch: number,
   ): Promise<Result<string, ExpectedError>> {
     const created = await ready;
     if (!created.ok) {
@@ -910,6 +1209,11 @@ export class SessionRegistry {
     }
     if (entry.phase !== "creating") {
       return err(new CancelledError("Session creation was cancelled by shutdown."));
+    }
+    if (!this.scopeCurrent(entry.scope, epoch)) {
+      return err(
+        new CancelledError("Session creation was cancelled because its worktree was removed."),
+      );
     }
     if (requestedFile && key.value !== requestedFile) {
       throw new Error("Executor did not reopen the requested saved session.");
@@ -1336,27 +1640,32 @@ export class SessionRegistry {
     previous.replacing = true;
     this.emit();
 
-    const task = this.replaceSession(previous, onAccepted).finally(() => {
-      previous.replacing = false;
-      this.replacements.delete(task);
-      this.emit();
-    });
+    const task = this.replaceSession(previous, this.scopeEpoch(previous.scope), onAccepted).finally(
+      () => {
+        previous.replacing = false;
+        this.replacements.delete(task);
+        this.emit();
+      },
+    );
     this.replacements.add(task);
 
-    return task;
+    return this.trackScoped(previous.scope, task);
   }
 
   private async replaceSession(
     previous: OpenExecution,
+    epoch: number,
     onAccepted?: () => void,
   ): Promise<Result<void, ExpectedError>> {
+    const cancelled = () =>
+      this.shuttingDown || previous.phase !== "open" || !this.scopeCurrent(previous.scope, epoch);
     // Prepare a distinct SDK conversation before interrupting the old one. A
     // failed factory must not discard a working tab or its on-disk history.
     const allowed = await previous.executor?.beforeNewSession?.();
     if (allowed && !allowed.ok) {
       return allowed;
     }
-    if (this.shuttingDown || previous.phase !== "open") {
+    if (cancelled()) {
       return err(new CancelledError("Session replacement was cancelled by shutdown."));
     }
 
@@ -1400,7 +1709,7 @@ export class SessionRegistry {
             "Replacement did not create a distinct conversation.",
           ),
         );
-      } else if (this.shuttingDown || previous.phase !== "open") {
+      } else if (cancelled()) {
         result = err(new CancelledError("Session replacement was cancelled by shutdown."));
       } else {
         onAccepted?.();
@@ -1426,7 +1735,7 @@ export class SessionRegistry {
               "Session replacement could not confirm cleanup of the previous conversation. Inspect the cleanup error before retrying.",
           };
           result = err(new AgentRunError(previous.recoveredState.error!, { cause: stopped.error }));
-        } else if (this.shuttingDown || previous.phase !== "open") {
+        } else if (cancelled()) {
           result = err(new CancelledError("Session replacement was cancelled by shutdown."));
         } else {
           const replacement: OpenExecution = {
@@ -1473,9 +1782,11 @@ export class SessionRegistry {
           error: "Unexpected session replacement failure. Inspect runtime.log before retrying.",
         };
       }
+      this.noteUnadoptedReplacement(previous, next);
       try {
         const cleanup = await next.close();
         if (!cleanup.ok) {
+          this.strandIfRemoved(previous.scope, next);
           throw cleanup.error;
         }
       } catch (cleanupError) {
@@ -1485,7 +1796,11 @@ export class SessionRegistry {
       throw error;
     }
 
+    this.noteUnadoptedReplacement(previous, next);
     const cleanup = await next.close();
+    if (!cleanup.ok) {
+      this.strandIfRemoved(previous.scope, next);
+    }
 
     return cleanup.ok
       ? result
@@ -1495,6 +1810,13 @@ export class SessionRegistry {
             cleanup.error,
           ]),
         );
+  }
+
+  // The SDK may already have written a file for a conversation the removed scope never adopted.
+  private noteUnadoptedReplacement(previous: OpenExecution, next: SessionExecutor): void {
+    if (this.scopeFenced(previous.scope)) {
+      this.noteExecutorCandidate(previous.scope, previous.id, "main", next, true);
+    }
   }
 
   close(id: string): Promise<Result<void, ExpectedError>> {
@@ -2067,6 +2389,17 @@ export class SessionRegistry {
         execution.role === "subagent"
           ? this.entries.values().find((entry) => entry.children.has(execution.id))?.scope
           : undefined;
+      // Creation cancelled by deletion may leave an SDK file that no record describes yet.
+      const ownerScope = scope ?? this.entries.get(execution.id)?.scope;
+      if (ownerScope && this.scopeFenced(ownerScope)) {
+        this.noteExecutorCandidate(
+          ownerScope,
+          execution.id,
+          execution.role,
+          created.value,
+          execution.managed ?? false,
+        );
+      }
       const tree = execution.worktree;
       if (scope) {
         execution.closedAt ??= Date.now();
@@ -2124,6 +2457,9 @@ export class SessionRegistry {
     }
 
     const entry = this.entries.get(id);
+    if (entry && this.scopeFenced(entry.scope)) {
+      return err(this.scopeRemoved());
+    }
 
     return !entry || entry.phase !== "open" || !entry.executor
       ? err(new SessionError("SESSION_NOT_OPEN", "Session is not open."))
@@ -2199,5 +2535,9 @@ export async function validateHistory(file: string): Promise<Result<void, Expect
     }
   }
 
+  return ok(undefined);
+}
+
+function settledOk(): Result<void, never> {
   return ok(undefined);
 }

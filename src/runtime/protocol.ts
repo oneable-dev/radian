@@ -313,6 +313,36 @@ export type ChatCollection = Omit<Static<typeof chatCollectionSchema>, "sessions
   readonly details: Readonly<Record<string, ExecutionState>>;
 };
 
+/**
+ * Explicit workspace-deletion receipts. Only confirmed deletions appear here: cold, not-ready and
+ * unavailable repositories are reported elsewhere and never imply that state was deleted.
+ * `pending` scopes are fenced and still being purged; `complete` scopes were purged; `reopened`
+ * scopes admit a fresh generation at the same identity. Each scope carries the ledger revision of
+ * its latest change. A client scrubs UI memory for every scope whose revision is newer than the
+ * revision it last acknowledged (a reopened scope's old data may still be in a disconnected
+ * client's memory), then acknowledges the top-level `revision` to its UI store.
+ */
+export const deletedScopesSchema = Type.Object({
+  revision: Type.Integer({ minimum: 0 }),
+  scopes: Type.Array(
+    Type.Object({
+      token: Type.String({ minLength: 1 }),
+      repositoryId: id,
+      kind: Type.Union([Type.Literal("repository"), Type.Literal("worktrees")]),
+      worktreeIds: Type.Array(id),
+      sessionIds: Type.Array(id),
+      revision: Type.Integer({ minimum: 1 }),
+      state: Type.Union([
+        Type.Literal("pending"),
+        Type.Literal("complete"),
+        Type.Literal("reopened"),
+      ]),
+    }),
+  ),
+});
+
+export type DeletedScopes = Static<typeof deletedScopesSchema>;
+
 export const snapshotSchema = Type.Object({
   chat: Type.Optional(chatCollectionSchema),
   version: Type.Literal(protocolVersion),
@@ -322,6 +352,9 @@ export const snapshotSchema = Type.Object({
   mode: Type.Union([Type.Literal("live"), Type.Literal("offline")]),
   repositoryId: id,
   repositories: Type.Array(repository),
+  // Shared daemon only: retained repositories that are no longer current workspace members.
+  // They keep existing resources and records but accept no new work.
+  unavailableRepositories: Type.Optional(Type.Array(id)),
   details: Type.Record(Type.String(), execution),
   closingCount: Type.Integer({ minimum: 0 }),
   preferences: preferencesSchema,
@@ -332,6 +365,7 @@ export const snapshotSchema = Type.Object({
   editors: Type.Optional(Type.Array(editorInfoSchema)),
   terminals: Type.Optional(Type.Array(terminalInfoSchema)),
   terminalClosingCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  deletedScopes: Type.Optional(deletedScopesSchema),
   sessionRetention: Type.Optional(
     Type.Object({
       retentionDays: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),

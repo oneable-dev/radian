@@ -152,8 +152,16 @@ bun run start runtime stop
 ```
 
 **Stopping the runtime is not detaching.** It shuts down its agents, editors, and
-shells across all registered repositories. Save editor buffers and finish important
+shells across all workspace repositories. Save editor buffers and finish important
 jobs first. A stopped runtime does not preserve live Neovim buffers or shell processes.
+
+The runtime remembers which settings file you launched with and rediscovers your
+workspace from its latest contents on every start or restart, even before a TUI
+connects. Repositories that are missing, renamed or removed from the configuration are
+not restored; their saved conversations and drafts stay on disk. Only a confirmed
+deletion of a watched checkout removes Radian's own data for it. An open TUI then moves
+to the next remaining workspace, or back to its existing CHAT view when none remain
+([details](docs/reference.md#workspace-roots)).
 
 ## Keybindings
 

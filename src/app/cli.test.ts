@@ -47,6 +47,9 @@ test("Shared daemon lifecycle and legacy repository services parse as separate t
   expect(service.offline).toBe(true);
   expect(service.cwd).toBe("/repo");
   expect(service.stateRoot).toBe("/state");
+  // An explicit runtime cwd selects a workspace source for a directly launched daemon.
+  expect(service.runtimeCwd).toBe(true);
+  expect(options(["--runtime-service"]).runtimeCwd).toBeUndefined();
   expect(options(["runtime", "status", "--test-runtime", "--runtime-cwd", "/repo"]).status).toBe(
     true,
   );

@@ -138,11 +138,11 @@ export class ChatRuntime {
     };
   }
 
-  startRetention(configPath?: string): void {
+  startRetention(configPath?: string, implicitPath?: string): void {
     if (this.retention) return;
     this.retention = new RetentionScheduler(
       async () => {
-        const settings = await loadSessionSettings(configPath);
+        const settings = await loadSessionSettings(configPath, implicitPath);
         if (!settings.ok) return settings;
         return this.store.prune(settings.value.retentionDays, (entry, file) =>
           this.stopped

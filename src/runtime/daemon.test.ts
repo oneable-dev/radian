@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Value } from "typebox/value";
 import { replySchema, type RuntimeSnapshot } from "./protocol.ts";
@@ -7,7 +7,8 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
 import { defaultPreferences, fetchSnapshot, RuntimeClient } from "./client.ts";
-import { connectRuntime, ensureSharedDaemon } from "./lifecycle.ts";
+import { connectRuntime, ensureSharedDaemon, prepareWorkspace } from "./lifecycle.ts";
+import { workspaceSource } from "../app/settings.ts";
 import {
   acquireRuntime,
   daemonPaths,
@@ -347,18 +348,21 @@ test("Corrupt shared registrations survive startup failures and cleanup without 
   }
 }, 20000);
 
-test("runtime restart replaces shared processes outside Git and restores registered catalogs", async () => {
-  // Prepare restart commands from cwd unrelated to registered repositories.
+test("runtime restart replaces shared processes outside Git and rediscovers the remembered workspace", async () => {
+  // Prepare restart commands from cwd unrelated to the workspace source.
   const fixture = await createWorktreeFixture();
   const stateRoot = join(fixture.directory, "state");
-  const options = { offline: true, stateRoot, start: false, register: true };
-  const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-  if (!client) {
-    throw new Error("Missing catalog.");
-  }
-
-  const before = client.snapshot;
-  await client.disconnect();
+  const config = join(fixture.directory, "settings.json");
+  await writeFile(config, JSON.stringify({ workspace: { roots: [fixture.main], maxDepth: 0 } }));
+  expectOk(
+    await prepareWorkspace(workspaceSource({ config, cwd: fixture.main }), {
+      offline: true,
+      stateRoot,
+    }),
+  );
+  const before = expectOk(
+    await fetchSnapshot(runtimePaths(fixture.repository.id, true, stateRoot)),
+  )!;
   try {
     // Locate targets through state roots/modes without Git discovery or UI settings.
     const process = Bun.spawn(
@@ -394,3 +398,167 @@ test("runtime restart replaces shared processes outside Git and restores registe
     await fixture.cleanup();
   }
 }, 20000);
+
+test("Concurrent TUI attachments share the daemon catalog, and re-entry discovers newly configured repositories", async () => {
+  // Two same-config TUIs start concurrently against an absent daemon.
+  const a = await createWorktreeFixture();
+  const b = await createWorktreeFixture();
+  const stateRoot = join(a.directory, "state");
+  const config = join(a.directory, "settings.json");
+  const options = { offline: true, stateRoot };
+  const workspaces: WorkspaceClient[] = [];
+  await writeFile(config, JSON.stringify({ workspace: { roots: [a.main], maxDepth: 0 } }));
+  try {
+    const source = workspaceSource({ config, cwd: a.main });
+    for (const opened of await Promise.all([
+      WorkspaceClient.attach(source, options),
+      WorkspaceClient.attach(source, options),
+    ])) {
+      workspaces.push(expectOk(opened));
+    }
+
+    // Both mirror one daemon-owned membership; no client registered its own list.
+    const daemon = expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!;
+    expect(daemon.repositories.map((repo) => repo.id)).toEqual([a.repository.id]);
+    for (const workspace of workspaces) {
+      expect(workspace.snapshot.repositories.map((repo) => repo.id)).toEqual([a.repository.id]);
+    }
+
+    // Re-entry after a config edit asks the daemon to rediscover; existing TUIs follow its snapshot.
+    await writeFile(
+      config,
+      JSON.stringify({ workspace: { roots: [a.main, b.main], maxDepth: 0 } }),
+    );
+    workspaces.push(expectOk(await WorkspaceClient.attach(source, options)));
+    for (const workspace of workspaces) {
+      await until(() =>
+        workspace.snapshot.repositories.some((repo) => repo.id === b.repository.id),
+      );
+    }
+
+    expect(expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!.pid).toBe(daemon.pid);
+    expect(
+      expectOk(await fetchSnapshot(runtimePaths(b.repository.id, true, stateRoot)))!.capabilities,
+    ).toContain("repository-catalog");
+  } finally {
+    await Promise.all(workspaces.map((workspace) => workspace.disconnect()));
+    await stop(stateRoot);
+    await a.cleanup();
+    await b.cleanup();
+  }
+}, 30000);
+
+test("A conflicting policy refresh is rejected before the remembered source or catalog changes", async () => {
+  // A running repository enforces the first settings file's session policy.
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const first = join(fixture.directory, "first.json");
+  const second = join(fixture.directory, "second.json");
+  const workspace = { workspace: { roots: [fixture.main], maxDepth: 0 } };
+  await writeFile(first, JSON.stringify(workspace));
+  await writeFile(second, JSON.stringify(workspace));
+  const options = { offline: true, stateRoot };
+  try {
+    const source = workspaceSource({ config: first, cwd: fixture.main });
+    expectOk(await prepareWorkspace(source, options));
+
+    // The other file would silently change that running policy, so nothing is adopted.
+    const rejected = await prepareWorkspace(
+      workspaceSource({ config: second, cwd: fixture.main }),
+      options,
+    );
+
+    expect(expectError(rejected).code).toBe("INVALID_INPUT");
+    const registry = JSON.parse(await readFile(daemonPaths(true, stateRoot).manifest, "utf8"));
+    expect(registry.source).toEqual(source);
+    expect(
+      expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!.repositories.map(
+        (repo) => repo.id,
+      ),
+    ).toEqual([fixture.repository.id]);
+
+    // A refresh that excludes the repository is allowed without stopping its live host.
+    await writeFile(second, JSON.stringify({ workspace: { roots: [], maxDepth: 0 } }));
+    expectOk(
+      await prepareWorkspace(workspaceSource({ config: second, cwd: fixture.directory }), options),
+    );
+    expect(expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!.repositories).toEqual([]);
+  } finally {
+    await stop(stateRoot);
+    await fixture.cleanup();
+  }
+}, 30000);
+
+test("Status and stop never adopt or discover a workspace source", async () => {
+  // A daemon without a remembered source has no membership owner and lists nothing.
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  try {
+    const started = expectOk(await ensureSharedDaemon({ offline: true, stateRoot }));
+    expect(started.repositories).toEqual([]);
+    expect(started.capabilities).toContain("workspace-source");
+
+    await stop(stateRoot);
+    const registry = await readFile(daemonPaths(true, stateRoot).manifest, "utf8").catch(
+      () => null,
+    );
+    expect(registry === null || JSON.parse(registry).source === undefined).toBe(true);
+  } finally {
+    await stop(stateRoot);
+    await fixture.cleanup();
+  }
+}, 20000);
+
+test("Every attached TUI receives explicit deletion summaries and cannot save deleted drafts back", async () => {
+  // Two workspaces share one daemon; one still holds the deleted draft in memory.
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const config = join(fixture.directory, "settings.json");
+  const options = { offline: true, stateRoot };
+  const workspaces: WorkspaceClient[] = [];
+  await writeFile(config, JSON.stringify({ workspace: { roots: [fixture.main], maxDepth: 0 } }));
+  try {
+    const source = workspaceSource({ config, cwd: fixture.main });
+    workspaces.push(expectOk(await WorkspaceClient.attach(source, options)));
+    workspaces.push(expectOk(await WorkspaceClient.attach(source, options)));
+    const [first, stale] = workspaces as [WorkspaceClient, WorkspaceClient];
+    const deleted = expectOk(await first.create(fixture.feature));
+    const kept = expectOk(await first.create(fixture.main));
+    const drafts = first.snapshot.preferences;
+    drafts.drafts[deleted] = "deleted draft";
+    drafts.drafts[kept] = "kept draft";
+    drafts.selection.worktreeId = fixture.feature;
+    expectOk(await first.savePreferences(drafts));
+    await until(() => stale.snapshot.details[deleted] !== undefined);
+    const stalePreferences = structuredClone(drafts);
+
+    await rm(fixture.feature, { recursive: true });
+    for (const workspace of workspaces) {
+      await until(
+        () =>
+          workspace.snapshot.deletedScopes?.scopes.some(
+            (scope) => scope.worktreeIds.includes(fixture.feature) && scope.state === "reopened",
+          ) === true,
+      );
+    }
+
+    // Memory is scrubbed from the explicit summary, never inferred from catalog absence.
+    expect(stale.snapshot.preferences.drafts[deleted]).toBeUndefined();
+    expect(stale.snapshot.preferences.selection.worktreeId).not.toBe(fixture.feature);
+    expect(
+      stale.snapshot.repositories.flatMap((repo) => repo.worktrees.map((tree) => tree.id)),
+    ).not.toContain(fixture.feature);
+
+    expectOk(await stale.savePreferences(stalePreferences));
+    const manifest = JSON.parse(
+      await readFile(runtimePaths(fixture.repository.id, true, stateRoot).manifest, "utf8"),
+    ) as { preferences: { drafts: Record<string, string> } };
+    expect(manifest.preferences.drafts[deleted]).toBeUndefined();
+    expect(manifest.preferences.drafts[kept]).toBe("kept draft");
+    expect(stale.snapshot.preferences.drafts[kept]).toBe("kept draft");
+  } finally {
+    await Promise.all(workspaces.map((workspace) => workspace.disconnect()));
+    await stop(stateRoot);
+    await fixture.cleanup();
+  }
+}, 40000);

@@ -1,11 +1,17 @@
-import { discoverOptionalRepository, discoverRepository } from "../workspace/discovery.ts";
-import { discoverWorkspace } from "../workspace/roots.ts";
-import { loadSettings } from "./settings.ts";
+import { discoverRepository } from "../workspace/discovery.ts";
+import { loadSettings, workspaceSource } from "./settings.ts";
 import { WorkspaceClient } from "../runtime/workspace-client.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
 import { submitAgentPrompt } from "./agent-prompt.ts";
 import { currentUiIdentity, retainedUiDrafts, UiStateStore, type UiState } from "./ui-state.ts";
+import {
+  initialView,
+  recordWorktreeOwners,
+  UiStatePersistence,
+  WorkspaceDeletions,
+  worktreeOwners,
+} from "./workspace-deletion.ts";
 import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { Repository } from "../workspace/model.ts";
 import { defaultPreferences, fetchSnapshot, RuntimeClient } from "../runtime/client.ts";
@@ -35,8 +41,16 @@ export async function main(
 ): Promise<Result<void, ExpectedError>> {
   if (options.service) {
     const { runRuntime } = await import("../runtime/daemon.ts");
+    // Launch flags select a workspace source; otherwise the daemon re-reads its remembered one.
+    const explicit = options.config || options.workspaceConfig || options.runtimeCwd;
+    const source = explicit ? workspaceSource(options) : undefined;
 
-    return capture(() => runRuntime(options.offline, options.stateRoot));
+    return capture(() =>
+      runRuntime(options.offline, options.stateRoot, {
+        ...(source ? { source } : {}),
+        ...(options.runtimeAttachChat ? { attachChat: true } : {}),
+      }),
+    );
   }
 
   const administrative = options.stop || options.status || options.restart;
@@ -52,45 +66,17 @@ export async function main(
     return settings;
   }
 
-  let repositories: readonly Repository[] = [];
-  let discoveryError: string | null = null;
-  if (options.demo) {
-    repositories = demoWorkspace();
-  } else {
-    const config = settings.value.workspace;
-    if (!config.roots.length) {
-      const discovered = await discoverOptionalRepository(options.cwd);
-      if (discovered.ok) {
-        repositories = discovered.value ? [discovered.value] : [];
-      } else {
-        discoveryError = discovered.error.message;
-      }
-    } else {
-      const discovered = await discoverWorkspace(config);
-      if (!discovered.ok) {
-        discoveryError = `Workspace discovery [${discovered.error.code}]: ${discovered.error.message}`;
-      } else {
-        repositories = discovered.value.repositories;
-        discoveryError =
-          discovered.value.warnings
-            .map(({ path, error }) => `${path}: [${error.code}] ${error.message}`)
-            .join(" · ") || null;
-      }
-    }
-  }
-
+  // The shared daemon owns workspace membership. The TUI sends its source reference and
+  // consumes the catalog the daemon prepared; it never scans roots or registers a list itself.
+  const repositories: readonly Repository[] = options.demo ? demoWorkspace() : [];
+  const discoveryError: string | null = null;
   const connected = !options.demo
-    ? await WorkspaceClient.open(
-        repositories,
-        options.cwd,
-        {
-          offline: options.offline,
-          launch,
-          ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
-          ...(options.config ? { config: options.config } : {}),
-        },
-        connectRuntime,
-      )
+    ? await WorkspaceClient.attach(workspaceSource(options), {
+        offline: options.offline,
+        launch,
+        ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
+        ...(options.config ? { config: options.config } : {}),
+      })
     : ok(null);
   if (!connected.ok) {
     return connected;
@@ -269,12 +255,33 @@ async function runUI(
       daemonPaths(options.offline, options.stateRoot).directory,
       identity.ok ? identity.value : `client:${crypto.randomUUID()}`,
     );
-    const loaded = await uiStore.load(state.preferences);
+    const loaded = await uiStore.load(
+      state.preferences,
+      worktreeOwners(client.snapshot.repositories),
+    );
     if (loaded.ok) state = loaded.value;
     else initialWarnings.push(loaded.error);
   }
+  // load() scrubbed the stored state against the cleanup ledger up to its acknowledged revision.
+  const deletions = new WorkspaceDeletions(state, uiStore, uiStore?.acknowledgedCleanup ?? 0);
+  // A cleanup scrub before this UI attached (a purge while it was detached, or load itself) may
+  // already have cleared the selection; prepare() then has nothing newer but still reports it.
+  const selectedDeleted = deletions.prepare(
+    client?.snapshot.deletedScopes,
+    client?.snapshot.repositories,
+    uiStore?.selectionDeleted ?? false,
+  );
+  if (client) {
+    state.view = initialView(state.view, selectedDeleted, client.snapshot.repositories);
+  }
   const preferences: RuntimePreferences = state.preferences;
   const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
+  selection.forget({
+    worktreeIds: new Set(),
+    sessionIds: new Set(
+      client?.snapshot.deletedScopes?.scopes.flatMap((scope) => scope.sessionIds) ?? [],
+    ),
+  });
   selection.restore(preferences.selection);
 
   const renderer = await createCliRenderer({
@@ -369,16 +376,29 @@ async function runUI(
       })
       .catch(unexpected);
   };
-  let pendingPreferences: Promise<Result<void, ExpectedError>> = Promise.resolve(ok(undefined));
-  let lastPreferences = "";
+  const saves = new UiStatePersistence(uiStore, observe);
   let activatedWorktree: string | null = null;
   const persist = (): void => {
+    // Selection and draft callbacks fire synchronously while a deletion is applied.
+    if (deletions.suspended) {
+      return;
+    }
+
     const ownership = (state.sessionScopes ??= {});
     for (const source of sessionSources(client?.snapshot ?? { repositories })) {
-      for (const session of source.sessions) ownership[session.id] = source.scopeId;
+      for (const session of source.sessions) {
+        if (!deletions.isDeleted(session.id)) ownership[session.id] = source.scopeId;
+      }
     }
+    // Displayed repositories own their worktree keys; a later deletion of another repository
+    // that used the same path then leaves this state alone.
+    state.worktreeRepositories = recordWorktreeOwners(state, selection.snapshot);
     const current = selection.state;
-    const sessions = { ...preferences.selection.sessions, ...current.sessions };
+    const sessions = Object.fromEntries(
+      Object.entries({ ...preferences.selection.sessions, ...current.sessions }).filter(
+        ([, id]) => !deletions.isDeleted(id),
+      ),
+    );
     for (const tree of selection.snapshot.flatMap((repo) => repo.worktrees)) {
       if (client?.hasSnapshot(tree.id) && !current.sessions[tree.id]) {
         delete sessions[tree.id];
@@ -393,22 +413,22 @@ async function runUI(
       }
     }
 
-    const key = JSON.stringify(state);
-    if (!uiStore || key === lastPreferences) {
-      return;
-    }
-
-    lastPreferences = key;
-    const snapshot = structuredClone(state);
-    pendingPreferences = pendingPreferences.then(() => uiStore!.save(snapshot));
-    observe(pendingPreferences);
+    saves.save(state);
   };
   const unsubscribeSelection = selection.subscribe(persist);
   let recovery = client?.recoveryVersion ?? 0;
   const unsubscribe = client?.subscribe(() => {
     const restored = recovery !== client.recoveryVersion;
     recovery = client.recoveryVersion;
-    selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
+    // Explicit deletions only: cold, unavailable or disconnected repositories are not deleted.
+    const applied = deletions.apply(client.snapshot.deletedScopes, client.snapshot.repositories, {
+      selection,
+      ...(view ? { view } : {}),
+      persist,
+    });
+    if (!applied) {
+      selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
+    }
     preload();
     if (restored) {
       view?.refreshHistory();
@@ -425,8 +445,8 @@ async function runUI(
     unsubscribe?.();
     unsubscribeSelection();
     if (view) {
-      preferences.drafts = view.promptDrafts;
-      preferences.inputDrafts = view.promptInputDrafts;
+      preferences.drafts = deletions.withoutDeleted(view.promptDrafts);
+      preferences.inputDrafts = deletions.withoutDeleted(view.promptInputDrafts);
       persist();
     }
 
@@ -566,8 +586,8 @@ async function runUI(
                 ),
               ]),
             onDraftChange: (drafts, inputs) => {
-              preferences.drafts = drafts;
-              preferences.inputDrafts = inputs;
+              preferences.drafts = deletions.withoutDeleted(drafts);
+              preferences.inputDrafts = deletions.withoutDeleted(inputs);
               persist();
             },
             initialWorkViews: restoreWorkViews(preferences),
@@ -614,9 +634,9 @@ async function runUI(
     preloaded?.dispose();
     unsubscribe?.();
     unsubscribeSelection();
-    preferences.drafts = view?.promptDrafts ?? preferences.drafts;
+    preferences.drafts = deletions.withoutDeleted(view?.promptDrafts ?? preferences.drafts);
     if (view) {
-      preferences.inputDrafts = view.promptInputDrafts;
+      preferences.inputDrafts = deletions.withoutDeleted(view.promptInputDrafts);
     }
 
     persist();
@@ -629,7 +649,7 @@ async function runUI(
     await renderer.closed;
     await destroyTreeSitterClient();
 
-    const saved = await pendingPreferences;
+    const saved = await saves.settled;
     if (!saved.ok) {
       console.error(`[${saved.error.code}] Could not save UI preferences: ${saved.error.message}`);
     }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
@@ -149,14 +149,15 @@ test("External Git worktrees are detected by the same daemon and immediately sup
   }
 }, 25000);
 
-test("Deleted worktrees retain open sessions and remove rows after the final session closes", async () => {
+test("Worktrees leaving Git without deletion evidence retain open sessions until the final session closes", async () => {
   const app = await fixtureRuntime();
   try {
     const client = await app.connect();
     const id = expectOk(await client.create(app.feature));
 
-    // Removing Git registration must not silently dispose a session owned by the daemon.
-    await app.git(app.main, ["worktree", "remove", "--force", app.feature]);
+    // A moved checkout whose registration was pruned is not deleted; only a confirmed unlink is.
+    await rename(app.feature, join(app.directory, "moved-feature"));
+    await app.git(app.main, ["worktree", "prune"]);
     await until(() =>
       client.snapshot.repositories[0]!.worktrees.some(
         (tree) => tree.path === app.feature && tree.sessions.some((session) => session.id === id),

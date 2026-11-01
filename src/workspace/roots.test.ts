@@ -1,9 +1,82 @@
 import { expect, test } from "bun:test";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
-import { discoverWorkspace } from "./roots.ts";
+import {
+  discoverConfiguredWorkspace,
+  discoverWorkspace,
+  workspacePathIsReachable,
+} from "./roots.ts";
+
+test.each([
+  {
+    label: "direct child",
+    root: "/workspace",
+    path: "/workspace/project",
+    depth: 1,
+    expected: true,
+  },
+  { label: "outside root", root: "/workspace", path: "/other/project", depth: 4, expected: false },
+  {
+    label: "root ancestor",
+    root: "/workspace/private",
+    path: "/workspace",
+    depth: 4,
+    expected: false,
+  },
+  {
+    label: "reduced depth",
+    root: "/workspace",
+    path: "/workspace/team/project",
+    depth: 1,
+    expected: false,
+  },
+  {
+    label: "dependency directory",
+    root: "/workspace",
+    path: "/workspace/node_modules/project",
+    depth: 4,
+    expected: false,
+  },
+  {
+    label: "vendor directory",
+    root: "/workspace",
+    path: "/workspace/vendor/project",
+    depth: 4,
+    expected: false,
+  },
+  {
+    label: "hidden directory",
+    root: "/workspace",
+    path: "/workspace/.hidden/project",
+    depth: 4,
+    expected: false,
+  },
+  {
+    label: "explicit hidden root",
+    root: "/workspace/.hidden",
+    path: "/workspace/.hidden",
+    depth: 0,
+    expected: true,
+  },
+  {
+    label: "explicit vendor root",
+    root: "/workspace/vendor",
+    path: "/workspace/vendor",
+    depth: 0,
+    expected: true,
+  },
+])(
+  "Uncertainty eligibility follows scanner reachability for $label",
+  ({ root, path, depth, expected }) => {
+    // The configured input, not a previous catalog entry, determines the allowed traversal boundary.
+    const reachable = workspacePathIsReachable(root, path, depth);
+
+    // Failures may retain prior candidates only inside that same depth and exclusion contract.
+    expect(reachable).toBe(expected);
+  },
+);
 
 async function init(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
@@ -108,6 +181,49 @@ test("Explicit symlink roots canonicalize and broken/missing roots preserve vali
       "STORAGE_FAILED",
       "GIT_DISCOVERY_FAILED",
     ]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("Configured discovery uses the launch repository only for empty roots", async () => {
+  const fixture = await createWorktreeFixture();
+  try {
+    const outside = join(fixture.directory, "outside");
+    await mkdir(outside);
+
+    // Empty roots select the repository containing the launch path, or nothing outside Git.
+    const current = expectOk(
+      await discoverConfiguredWorkspace({ roots: [], maxDepth: 4 }, fixture.feature),
+    );
+    const none = expectOk(await discoverConfiguredWorkspace({ roots: [], maxDepth: 4 }, outside));
+    // Configured roots ignore the launch path entirely.
+    const rooted = expectOk(
+      await discoverConfiguredWorkspace({ roots: [outside], maxDepth: 4 }, fixture.main),
+    );
+
+    expect(current.repositories.map((repo) => repo.id)).toEqual([fixture.repository.id]);
+    expect(none).toEqual({ repositories: [], warnings: [] });
+    expect(rooted).toEqual({ repositories: [], warnings: [] });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("Roots containing deleted repositories report only current candidates", async () => {
+  const fixture = await createWorktreeFixture();
+  try {
+    const projects = join(fixture.directory, "projects");
+    const removed = join(projects, "removed");
+    await init(removed);
+    await init(join(projects, "kept"));
+    await rm(removed, { recursive: true, force: true });
+
+    // A previously discovered path produces neither a candidate nor a recurring warning.
+    const result = expectOk(await discoverWorkspace({ roots: [projects], maxDepth: 2 }));
+
+    expect(result.repositories.map((repo) => repo.name)).toEqual(["kept"]);
+    expect(result.warnings).toEqual([]);
   } finally {
     await fixture.cleanup();
   }

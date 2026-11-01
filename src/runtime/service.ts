@@ -11,6 +11,7 @@ import {
   collectCleanup,
   InputError,
   ProtocolError,
+  ResourceError,
   SessionError,
   parseJson,
   reportUnexpected,
@@ -18,7 +19,11 @@ import {
   type ExpectedError,
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
+import {
+  SessionRegistry,
+  type SessionDeletionCandidate,
+  type SessionRecord,
+} from "../agents/session-registry.ts";
 import { sessionRecordKey } from "../agents/session-snapshot.ts";
 import { expandPromptDraft } from "../agents/prompt-input.ts";
 import { parseSessionControl, type SessionControl } from "../agents/session-controls.ts";
@@ -31,7 +36,10 @@ import { discoverRepository } from "../workspace/discovery.ts";
 import type { Repository } from "../workspace/model.ts";
 import { RepositoryCatalog } from "../workspace/catalog.ts";
 import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
+import type { DeletionTracker } from "../workspace/deletion.ts";
 import { daemonPaths, privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
+import { scrubPreferences } from "./workspace-preferences.ts";
+import { unavailableRepository } from "./repository-host.ts";
 import { AccountManager } from "../accounts/manager.ts";
 import { accountRequestSchema } from "../accounts/model.ts";
 import { EditorSessions } from "../editor/sessions.ts";
@@ -60,8 +68,10 @@ export async function openRepositoryRuntime(
   stateRoot?: string,
   configPath?: string,
   sharedAccounts?: AccountManager,
+  implicitConfig?: string,
+  scope: RuntimeScopeOptions = {},
 ): Promise<Result<WorkspaceRuntime, ExpectedError>> {
-  const settings = await loadSessionSettings(configPath);
+  const settings = await loadSessionSettings(configPath, implicitConfig);
   if (!settings.ok) {
     return settings;
   }
@@ -125,7 +135,13 @@ export async function openRepositoryRuntime(
         settings.value.exists ? settings.value.path : configPath,
         accounts,
         !sharedAccounts,
+        implicitConfig,
       );
+      // Scopes confirmed deleted while this runtime was opening never restore resources.
+      if (scope.deletedWorktreeIds?.size) runtime.fenceScope(scope.deletedWorktreeIds);
+      runtime.deletion = scope.deletion;
+      // Later deletions must reach pending restore work, not only this call-time copy.
+      scope.onPrepared?.(runtime);
       await runtime.restore(manifest?.records ?? [], manifest?.repositories ?? []);
       await runtime.watchRepository();
       await runtime.watchHistory(sessionDir);
@@ -153,8 +169,21 @@ export async function openRepositoryRuntime(
   );
 }
 
+export type RuntimeScopeOptions = {
+  // Shared positive deletion evidence; it outlives this runtime's watcher.
+  deletion?: DeletionTracker | undefined;
+  deletedWorktreeIds?: ReadonlySet<string>;
+  /**
+   * Receives the runtime synchronously before it restores any resources, so its owner can
+   * forward scope fences while initialization is pending. The runtime is not ready to serve
+   * requests; if initialization fails, this function stops it and the owner must not.
+   */
+  onPrepared?: ((runtime: WorkspaceRuntime) => void) | undefined;
+};
+
 export class WorkspaceRuntime {
   onStop: () => void = () => {};
+  deletion: DeletionTracker | undefined;
 
   stopped = false;
   private preferences: RuntimePreferences;
@@ -175,9 +204,17 @@ export class WorkspaceRuntime {
   private initializing = true;
   private watcher: RepositoryWatcher | undefined;
   private discoveryWarning = "";
+  // Confirmed absent from the filesystem, or excluded from the current workspace configuration.
+  private missing = false;
+  private excluded = false;
   private retentionWarning = "";
   private retention: RetentionScheduler | undefined;
   private retentionStatus: RuntimeSnapshot["sessionRetention"];
+  // Confirmed deleted worktrees: no new work, no catalog row, until their cleanup is released.
+  private readonly deleted = new Set<string>();
+  // Conversations of purged scopes stay deleted; stale clients cannot write their drafts back.
+  private readonly purgedSessions = new Set<string>();
+  private checkpointing: Promise<unknown> = Promise.resolve();
 
   private get repositoryId(): string {
     return this.repository.id;
@@ -196,6 +233,7 @@ export class WorkspaceRuntime {
     private readonly configPath?: string,
     private readonly accounts?: AccountManager,
     private readonly ownsAccounts = false,
+    private readonly implicitConfig?: string,
   ) {
     this.preferences = preferences;
     this.editors = new EditorSessions(catalog, () => this.changed(), { clean: offline });
@@ -227,7 +265,7 @@ export class WorkspaceRuntime {
 
     this.retention = new RetentionScheduler(
       async () => {
-        const settings = await loadSessionSettings(configuredFile);
+        const settings = await loadSessionSettings(configuredFile, this.implicitConfig);
         if (!settings.ok) {
           return settings;
         }
@@ -283,11 +321,16 @@ export class WorkspaceRuntime {
         if (this.stopped) {
           return;
         }
-        if (result.ok) {
+        if (!result.ok) {
+          this.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+        } else if (result.value) {
           this.repository = result.value;
+          this.missing = false;
           this.discoveryWarning = "";
         } else {
-          this.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+          // Deletion is not an error to repeat: retain open resources, refuse new work.
+          this.missing = true;
+          this.discoveryWarning = "";
         }
 
         this.changed();
@@ -296,6 +339,7 @@ export class WorkspaceRuntime {
         this.discoveryWarning = reportUnexpected(error, "worktree discovery");
         this.changed();
       },
+      this.deletion ? { deletion: this.deletion } : {},
     );
     const started = await this.watcher.start();
     if (!started.ok) {
@@ -340,7 +384,80 @@ export class WorkspaceRuntime {
         record.worktreeId ? [record.worktreeId] : [],
       ),
     ]);
-    this.catalog.replace([this.repository], retained);
+    // Unavailable repositories keep only the rows that existing resources still own.
+    this.catalog.replace(
+      this.missing || this.excluded ? [] : [this.repository],
+      retained,
+      this.deleted,
+    );
+  }
+
+  /** Whether discovery currently confirms this repository on disk. */
+  get repositoryMissing(): boolean {
+    return this.missing;
+  }
+
+  rediscovered(repository: Repository): void {
+    if (this.stopped) {
+      return;
+    }
+
+    this.repository = repository;
+    this.missing = false;
+    this.changed();
+  }
+
+  /** Marks whether the current workspace configuration still includes this repository. */
+  setExcluded(excluded: boolean): void {
+    if (this.excluded === excluded) {
+      return;
+    }
+
+    this.excluded = excluded;
+    this.changed();
+  }
+
+  /**
+   * Whether open sessions, editors, terminals or unrecovered records still own worktrees.
+   * Unavailable repositories are released only after this becomes false.
+   */
+  get retainsResources(): boolean {
+    return (
+      this.registry.retainedWorktreeIds.size > 0 ||
+      this.editors.retainedWorktreeIds.size > 0 ||
+      this.terminals.retainedWorktreeIds.size > 0 ||
+      this.failedRecovery.size > 0 ||
+      this.registry.closingCount > 0 ||
+      this.terminals.closingCount > 0
+    );
+  }
+
+  // New work requires a currently discovered worktree; retained rows serve existing resources only.
+  private admit(worktreeId: string): Result<void, ResourceError> {
+    if (this.excluded || this.missing) {
+      return err(unavailableRepository());
+    }
+    if (this.deleted.has(worktreeId)) {
+      return err(
+        new ResourceError(
+          "This worktree was deleted; its cleanup is pending. No work was started.",
+        ),
+      );
+    }
+
+    return this.repository.worktrees.some((tree) => tree.id === worktreeId)
+      ? ok(undefined)
+      : err(
+          new ResourceError(
+            "This worktree is no longer available. Existing sessions and terminals were retained; new work was not started.",
+          ),
+        );
+  }
+
+  private admitSession(sessionId: string): Result<void, ResourceError> {
+    const worktreeId = this.registry.records.find((record) => record.id === sessionId)?.worktreeId;
+
+    return worktreeId ? this.admit(worktreeId) : ok(undefined);
   }
 
   async restore(
@@ -798,13 +915,17 @@ export class WorkspaceRuntime {
         return answered.ok ? ok(null) : answered;
       }
       case "create": {
-        return this.registry.create(command.worktreeId);
+        const admitted = this.admit(command.worktreeId);
+
+        return admitted.ok ? this.registry.create(command.worktreeId) : admitted;
       }
       case "chat-create":
       case "chat-resume":
         return err(new InputError("CHAT commands belong to the shared daemon."));
       case "resume": {
-        return this.history.resume(command.worktreeId, command.savedId);
+        const admitted = this.admit(command.worktreeId);
+
+        return admitted.ok ? this.history.resume(command.worktreeId, command.savedId) : admitted;
       }
       case "close": {
         if (this.failedRecovery.delete(command.sessionId)) {
@@ -1015,7 +1136,7 @@ export class WorkspaceRuntime {
           drafts[id] = expandPromptDraft(draft, false).text;
         }
 
-        this.preferences = {
+        const preferences = {
           ...command.preferences,
           drafts,
           ...(inputDrafts ? { inputDrafts } : {}),
@@ -1024,11 +1145,21 @@ export class WorkspaceRuntime {
           ...(gitViews ? { gitViews } : {}),
           ...(agentViews ? { agentViews } : {}),
         };
+        this.preferences =
+          this.deleted.size || this.purgedSessions.size
+            ? scrubPreferences(preferences, {
+                worktreeIds: this.deleted,
+                sessionIds: this.purgedSessions,
+              })
+            : preferences;
 
         return ok(null);
       }
-      case "terminal-create":
-        return this.terminals.create(command.worktreeId, command);
+      case "terminal-create": {
+        const admitted = this.admit(command.worktreeId);
+
+        return admitted.ok ? this.terminals.create(command.worktreeId, command) : admitted;
+      }
       case "terminal-close":
         this.observe(this.terminals.close(command.terminalId));
         return ok(null);
@@ -1068,11 +1199,21 @@ export class WorkspaceRuntime {
 
         return result.ok ? ok(null) : result;
       }
-      case "editor-open":
+      case "editor-open": {
+        const existing = this.editors.infos.find(
+          (editor) => editor.worktreeId === command.worktreeId && !editor.exited,
+        );
+        if (existing) return ok(existing.id);
+        const admitted = this.admit(command.worktreeId);
+        if (!admitted.ok) {
+          return admitted;
+        }
+
         return this.editors.open(command.worktreeId, {
           cols: command.cols ?? 80,
           rows: command.rows ?? 24,
         });
+      }
       case "editor-detach":
         this.editors.detach(command.editorId, command.lease);
         return ok(null);
@@ -1135,7 +1276,9 @@ export class WorkspaceRuntime {
       return this.command({ type: "close", sessionId: id });
     }
     if (control.action === "new-tab") {
-      return this.registry.newTab(id);
+      const admitted = this.admitSession(id);
+
+      return admitted.ok ? this.registry.newTab(id) : admitted;
     }
     if (control.action === "reload") {
       const result = await this.registry.reload(id);
@@ -1273,7 +1416,9 @@ export class WorkspaceRuntime {
       records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()],
       preferences: this.preferences,
     };
-    const saved = await this.store.save(checkpoint);
+    const saving = this.store.save(checkpoint);
+    this.checkpointing = saving;
+    const saved = await saving;
     if (saved.ok) {
       this.registry.acknowledgeCheckpoint(checkpoint.records);
     }
@@ -1289,6 +1434,130 @@ export class WorkspaceRuntime {
     }
 
     return saved;
+  }
+
+  /**
+   * Synchronously blocks confirmed deleted worktrees: no new sessions, editors or terminals,
+   * no catalog rows, and no persisted UI state for them. Idempotent.
+   */
+  fenceScope(worktreeIds: ReadonlySet<string>): void {
+    const sessions = new Set(
+      [...this.registry.records, ...this.failedRecovery.values()]
+        .filter((record) => record.worktreeId && worktreeIds.has(record.worktreeId))
+        .map((record) => record.id),
+    );
+    for (const id of worktreeIds) this.deleted.add(id);
+    this.registry.fenceWorktrees(worktreeIds);
+    this.editors.fenceWorktrees(worktreeIds);
+    this.terminals.fenceWorktrees(worktreeIds);
+    this.preferences = scrubPreferences(this.preferences, { worktreeIds, sessionIds: sessions });
+    this.changed();
+  }
+
+  /**
+   * Terminates every Agent (including children and pending construction), editor and terminal
+   * of deleted worktrees and drains checkpoint writers. Returns conversation candidates whose
+   * files the purge must remove. Never a normal stop: no open intent is preserved.
+   */
+  async stopScope(
+    worktreeIds: ReadonlySet<string>,
+  ): Promise<Result<readonly SessionDeletionCandidate[], ExpectedError>> {
+    this.fenceScope(worktreeIds);
+    const recovered: SessionDeletionCandidate[] = [];
+    // Map iteration tolerates deleting the visited entry.
+    for (const record of this.failedRecovery.values()) {
+      if (!record.worktreeId || !worktreeIds.has(record.worktreeId)) continue;
+
+      recovered.push(deletionCandidate(record));
+      this.failedRecovery.delete(record.id);
+    }
+
+    const [sessions, editors, terminals] = await Promise.all([
+      this.registry.destroyWorktrees(worktreeIds),
+      this.editors.destroyWorktrees(worktreeIds),
+      this.terminals.destroyWorktrees(worktreeIds),
+    ]);
+    // Late checkpoints strip fenced scopes, but the purge must not overlap a running write.
+    if (this.checkpointTimer) {
+      clearTimeout(this.checkpointTimer);
+      this.checkpointTimer = undefined;
+    }
+    await this.checkpointing.catch(() => undefined);
+    this.changed();
+
+    const failed = [sessions, editors, terminals].find((result) => !result.ok);
+    if (failed && !failed.ok) return failed;
+
+    return ok([...recovered, ...(sessions.ok ? sessions.value : [])]);
+  }
+
+  /**
+   * After the purge and persistent reopen: forgets all in-memory state of the old generation,
+   * adopts the reopened store state and admits a fresh generation at the same identity.
+   */
+  async releaseScope(
+    worktreeIds: ReadonlySet<string>,
+    sessionIds: ReadonlySet<string>,
+  ): Promise<Result<void, ExpectedError>> {
+    this.preferences = scrubPreferences(this.preferences, { worktreeIds, sessionIds });
+    for (const id of sessionIds) {
+      this.restoredSessionOrder.delete(id);
+      this.purgedSessions.add(id);
+    }
+    const adopted = await this.store.adoptCleanup();
+    if (!adopted.ok) return adopted;
+
+    const released = collectResults([
+      this.registry.releaseWorktrees(worktreeIds),
+      this.editors.releaseWorktrees(worktreeIds),
+      this.terminals.releaseWorktrees(worktreeIds),
+    ]);
+    if (!released.ok) return released;
+
+    for (const id of worktreeIds) this.deleted.delete(id);
+    this.changed();
+
+    return ok(undefined);
+  }
+
+  /**
+   * Tears down a runtime whose whole repository was deleted. Unlike `stop`, nothing is
+   * checkpointed; returns every conversation candidate of the repository for the purge.
+   */
+  async destroy(): Promise<Result<readonly SessionDeletionCandidate[], ExpectedError>> {
+    const worktreeIds = new Set([
+      ...this.catalog.snapshot.flatMap((repo) => repo.worktrees.map((tree) => tree.id)),
+      ...this.registry.retainedWorktreeIds,
+      ...this.editors.retainedWorktreeIds,
+      ...this.terminals.retainedWorktreeIds,
+      ...[...this.failedRecovery.values()].flatMap((record) =>
+        record.worktreeId ? [record.worktreeId] : [],
+      ),
+    ]);
+    const stopped = await this.stopScope(worktreeIds);
+
+    this.stopped = true;
+    this.setObserved(false);
+    await this.retention?.stop();
+    this.unsubscribe();
+    this.unsubscribeAccounts?.();
+    this.historyWatcher?.stop();
+    const closed = await collectCleanup(
+      [
+        this.watcher
+          ? this.watcher.stop().then(() => ok(undefined))
+          : Promise.resolve(ok(undefined)),
+        this.registry.shutdown(),
+        this.editors.stop(),
+        this.terminals.stop(),
+        this.ownsAccounts && this.accounts ? this.accounts.stop() : Promise.resolve(ok(undefined)),
+      ],
+      "Deleted repository shutdown failed.",
+    );
+    await this.checkpointing.catch(() => undefined);
+    if (!stopped.ok) return stopped;
+
+    return closed.ok ? stopped : closed;
   }
 
   async stop(): Promise<Result<void, ExpectedError>> {
@@ -1348,6 +1617,24 @@ export class WorkspaceRuntime {
       "Final session checkpoint or runtime shutdown failed.",
     );
   }
+}
+
+function deletionCandidate(record: SessionRecord): SessionDeletionCandidate {
+  return {
+    worktreeId: record.worktreeId!,
+    sessionId: record.id,
+    role: "main",
+    // A hint only: the purge reads the SDK header for the real identity.
+    conversationId: record.state.conversationId ?? record.id,
+    ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+    managed: record.managed ?? false,
+  };
+}
+
+function collectResults(
+  results: readonly Result<void, ExpectedError>[],
+): Result<void, ExpectedError> {
+  return results.find((result) => !result.ok) ?? ok(undefined);
 }
 
 function mergeRepositories(current: Repository, manifest: RuntimeManifest | null): Repository[] {

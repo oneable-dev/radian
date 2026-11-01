@@ -3,7 +3,13 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectError, expectOk } from "../testing/results.ts";
-import { loadSessionSettings, loadSettings, parseSessionSettings } from "./settings.ts";
+import {
+  loadSessionSettings,
+  loadSettings,
+  loadWorkspaceSource,
+  parseSessionSettings,
+  workspaceSource,
+} from "./settings.ts";
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "radian-settings-"));
@@ -183,6 +189,125 @@ test("Display-only modes skip unused legacy workspace files", async () => {
 
     // Corrupt unused files must not fail demos or isolated tests.
     expect(settings.workspace).toEqual({ roots: [], maxDepth: 0 });
+  } finally {
+    await app.close();
+  }
+});
+
+test("Workspace sources remember references and launch context, not resolved roots", async () => {
+  // Default locations are captured when the source is created, independently of later env changes.
+  const app = await fixture();
+  try {
+    const source = workspaceSource({ cwd: "relative/repo" });
+
+    // Only file references, their explicitness and the original cwd are recorded.
+    expect(source).toEqual({
+      settings: { path: app.settings, explicit: false },
+      workspace: { path: join(app.root, "workspace.json"), explicit: false },
+      cwd: join(process.cwd(), "relative/repo"),
+    });
+    expect(JSON.stringify(source)).not.toContain("roots");
+    expect(
+      workspaceSource({ config: "custom.json", workspaceConfig: "roots.json", cwd: "/repo" }),
+    ).toMatchObject({
+      settings: { path: join(process.cwd(), "custom.json"), explicit: true },
+      workspace: { path: join(process.cwd(), "roots.json"), explicit: true },
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test("Headless workspace loading keeps section precedence and re-reads the latest file", async () => {
+  // UI-only sections may be invalid: the daemon reads workspace configuration only.
+  const app = await fixture();
+  try {
+    await app.file("workspace.json", { roots: ["./legacy"], maxDepth: 1 });
+    await app.file("settings.json", { theme: "UI-invalid", keybindings: 123 });
+    const source = workspaceSource({ cwd: app.directory });
+
+    // A missing unified section falls back to the legacy file, resolved against that file.
+    expect(expectOk(await loadWorkspaceSource(source, { offline: false }))).toEqual({
+      roots: [join(app.root, "legacy")],
+      maxDepth: 1,
+    });
+
+    // Later edits of the referenced file apply without a new reference.
+    await app.file("settings.json", { theme: "UI-invalid", workspace: { roots: ["./repos"] } });
+    expect(expectOk(await loadWorkspaceSource(source, { offline: false }))).toEqual({
+      roots: [join(app.root, "repos")],
+      maxDepth: 4,
+    });
+
+    // An explicit workspace file wins over the unified section.
+    const explicit = await app.file("explicit.json", { roots: [] });
+    expect(
+      expectOk(
+        await loadWorkspaceSource(
+          workspaceSource({ workspaceConfig: explicit, cwd: app.directory }),
+          { offline: false },
+        ),
+      ),
+    ).toEqual({ roots: [], maxDepth: 4 });
+  } finally {
+    await app.close();
+  }
+});
+
+test("Headless workspace loading keeps implicit-missing defaults and explicit-missing errors", async () => {
+  const app = await fixture();
+  try {
+    // Absent implicit files use the documented defaults in live mode.
+    const implicit = expectOk(
+      await loadWorkspaceSource(workspaceSource({ cwd: app.directory }), { offline: false }),
+    );
+    expect(implicit.maxDepth).toBe(4);
+    expect(implicit.roots).toHaveLength(2);
+
+    // Explicit files must exist and be valid.
+    for (const options of [
+      { config: join(app.root, "missing.json") },
+      { workspaceConfig: join(app.root, "missing-workspace.json") },
+    ]) {
+      const missing = await loadWorkspaceSource(
+        workspaceSource({ ...options, cwd: app.directory }),
+        { offline: false },
+      );
+      expect(expectError(missing).code).toBe("STORAGE_FAILED");
+    }
+
+    await app.file("settings.json", { workspace: { roots: "invalid" } });
+    const invalid = await loadWorkspaceSource(
+      workspaceSource({ config: app.settings, cwd: app.directory }),
+      { offline: false },
+    );
+    expect(expectError(invalid).code).toBe("INVALID_INPUT");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Offline workspace loading never reads implicit user roots but honors explicit fixtures", async () => {
+  // Test daemons must not scan real roots, even when the user's files are present or corrupt.
+  const app = await fixture();
+  try {
+    await app.file("settings.json", { workspace: { roots: ["~/projects"] } });
+    await writeFile(join(app.root, "workspace.json"), "{broken");
+
+    const implicit = await loadWorkspaceSource(workspaceSource({ cwd: app.directory }), {
+      offline: true,
+    });
+    expect(expectOk(implicit)).toEqual({ roots: [], maxDepth: 0 });
+
+    // An explicitly selected isolated fixture still provides multi-repository coverage.
+    const fixtureConfig = await app.file("fixture.json", {
+      workspace: { roots: ["./fixture-root"], maxDepth: 2 },
+    });
+    const explicit = await loadWorkspaceSource(
+      workspaceSource({ config: fixtureConfig, cwd: app.directory }),
+      { offline: true },
+    );
+    expect(expectOk(explicit)).toEqual({ roots: [join(app.root, "fixture-root")], maxDepth: 2 });
   } finally {
     await app.close();
   }

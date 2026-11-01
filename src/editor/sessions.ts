@@ -30,6 +30,10 @@ export class EditorSessions {
   private readonly sessions = new Map<string, PtySession>();
   private stopping = false;
   private readonly opening = new Map<string, Promise<Result<string, ExpectedError>>>();
+  // Removed worktrees reject opens; epochs reject launches begun for an older generation.
+  private readonly fenced = new Set<string>();
+  private readonly epochs = new Map<string, number>();
+  private readonly destroying = new Map<string, Promise<Result<void, ExpectedError>>>();
 
   constructor(
     private readonly repositories: RepositorySource,
@@ -42,7 +46,84 @@ export class EditorSessions {
   }
 
   get retainedWorktreeIds(): ReadonlySet<string> {
-    return new Set([...this.sessions.keys(), ...this.opening.keys()]);
+    return new Set([
+      ...[...this.sessions].flatMap(([id, session]) =>
+        !session.info.exited || session.lease ? [id] : [],
+      ),
+      ...this.opening.keys(),
+      ...this.destroying.keys(),
+    ]);
+  }
+
+  /** Synchronously blocks editor opening and I/O for removed worktrees. Idempotent. */
+  fenceWorktrees(worktreeIds: ReadonlySet<string>): void {
+    for (const id of worktreeIds) {
+      if (!this.fenced.has(id)) {
+        this.fenced.add(id);
+        this.epochs.set(id, (this.epochs.get(id) ?? 0) + 1);
+      }
+    }
+  }
+
+  /**
+   * Fences and terminates editors of removed worktrees, including pending launches, without
+   * waiting for unsaved-buffer confirmation. Idempotent; failed editors stay retained.
+   */
+  async destroyWorktrees(worktreeIds: ReadonlySet<string>): Promise<Result<void, ExpectedError>> {
+    this.fenceWorktrees(worktreeIds);
+
+    return collectCleanup(
+      [...worktreeIds].map((id) => this.destroyWorktree(id)),
+      "Could not stop every editor of the removed worktrees.",
+    );
+  }
+
+  /** Opens a new generation for destroyed worktree IDs. Refuses while old editors remain. */
+  releaseWorktrees(worktreeIds: ReadonlySet<string>): Result<void, ExpectedError> {
+    if ([...worktreeIds].some((id) => this.sessions.has(id) || this.retainedWorktreeIds.has(id))) {
+      return err(new EditorError("EDITOR_BUSY", "The removed worktree editor is still stopping."));
+    }
+    for (const id of worktreeIds) {
+      this.fenced.delete(id);
+    }
+
+    return ok(undefined);
+  }
+
+  private destroyWorktree(worktreeId: string): Promise<Result<void, ExpectedError>> {
+    const running = this.destroying.get(worktreeId);
+    if (running) {
+      return running;
+    }
+
+    const task = (async (): Promise<Result<void, ExpectedError>> => {
+      // A pending launch observes the epoch change and disposes its own PTY.
+      await this.opening.get(worktreeId)?.catch(() => undefined);
+
+      const session = this.sessions.get(worktreeId);
+      if (!session) {
+        return ok(undefined);
+      }
+
+      session.lease = null;
+      const stopped = await session.terminate();
+      if (stopped.ok && this.sessions.get(worktreeId) === session) {
+        this.sessions.delete(worktreeId);
+      }
+
+      return stopped;
+    })().finally(() => {
+      this.destroying.delete(worktreeId);
+      this.changed();
+    });
+    this.destroying.set(worktreeId, task);
+    this.changed();
+
+    return task;
+  }
+
+  private removed(): EditorError {
+    return new EditorError("EDITOR_NOT_OPEN", "This worktree was removed; the editor was closed.");
   }
 
   open(worktreeId: string, size = { cols: 80, rows: 24 }): Promise<Result<string, ExpectedError>> {
@@ -51,7 +132,10 @@ export class EditorSessions {
       return pending;
     }
 
-    const task = this.openOnce(worktreeId, size).finally(() => this.opening.delete(worktreeId));
+    const task = this.openOnce(worktreeId, size).finally(() => {
+      this.opening.delete(worktreeId);
+      this.changed();
+    });
     this.opening.set(worktreeId, task);
 
     return task;
@@ -64,7 +148,11 @@ export class EditorSessions {
     if (this.stopping) {
       return err(new EditorError("EDITOR_UNAVAILABLE", "Editor runtime is stopping."));
     }
+    if (this.fenced.has(worktreeId)) {
+      return err(this.removed());
+    }
 
+    const epoch = this.epochs.get(worktreeId) ?? 0;
     const worktree = repositorySnapshot(this.repositories)
       .flatMap((repo) => repo.worktrees)
       .find((tree) => tree.id === worktreeId);
@@ -91,6 +179,9 @@ export class EditorSessions {
       this.sessions.delete(worktreeId);
       if (this.stopping) {
         return err(new EditorError("EDITOR_UNAVAILABLE", "Editor runtime is stopping."));
+      }
+      if ((this.epochs.get(worktreeId) ?? 0) !== epoch) {
+        return err(this.removed());
       }
     }
 
@@ -141,6 +232,9 @@ export class EditorSessions {
     const session = this.find(editorId);
     if (session.ok && session.value.lease === lease) {
       session.value.lease = null;
+      if (session.value.info.exited) {
+        this.changed();
+      }
     }
   }
 
@@ -184,6 +278,9 @@ export class EditorSessions {
 
   private find(id: string): Result<PtySession, EditorError> {
     const session = [...this.sessions.values()].find((item) => item.id === id);
+    if (session && this.fenced.has(session.worktreeId)) {
+      return err(this.removed());
+    }
 
     return session
       ? ok(session)

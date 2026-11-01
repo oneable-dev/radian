@@ -15,6 +15,9 @@ export type CliOptions = {
   legacy?: boolean;
   noColor: boolean;
   cwd: string;
+  // Whether --runtime-cwd was given explicitly rather than defaulting to the launch directory.
+  runtimeCwd?: boolean;
+  runtimeAttachChat?: boolean;
   stateRoot: string | undefined;
   config: string | undefined;
   keybindings: string | undefined;
@@ -26,6 +29,7 @@ type RawOptions = {
   demo?: boolean;
   testRuntime?: boolean;
   runtimeService?: boolean;
+  runtimeAttachChat?: boolean;
   terminalSupervisor?: boolean;
   runtimeStatus?: boolean;
   stopRuntime?: boolean;
@@ -88,6 +92,9 @@ export function parseCli(
     .addOption(new Option("--stop-runtime", "Alias for runtime stop").hideHelp())
     .addOption(new Option("--runtime-service", "Run the internal shared daemon").hideHelp())
     .addOption(
+      new Option("--runtime-attach-chat", "Validate TUI policy before startup adoption").hideHelp(),
+    )
+    .addOption(
       new Option("--terminal-supervisor", "Run the internal terminal supervisor").hideHelp(),
     )
     .action(() => {});
@@ -134,6 +141,9 @@ export function parseCli(
   }
 
   const raw = program.opts<RawOptions>();
+  if (raw.runtimeAttachChat && !raw.runtimeService) {
+    return err(new InputError("Runtime CHAT attachment intent requires the internal daemon role."));
+  }
   if (raw.terminalSupervisor && args.length !== 1) {
     return err(
       new InputError("Terminal supervisor cannot be combined with other operations or settings."),
@@ -178,6 +188,7 @@ export function parseCli(
       demo: raw.demo ?? false,
       offline: raw.testRuntime ?? false,
       service: raw.runtimeService ?? false,
+      ...(raw.runtimeAttachChat ? { runtimeAttachChat: true } : {}),
       ...(raw.terminalSupervisor ? { supervisor: true } : {}),
       status: administrative === "status",
       stop: administrative === "stop",
@@ -185,6 +196,7 @@ export function parseCli(
       legacy: raw.legacy ?? false,
       noColor: raw.color === false || Boolean((context.env ?? process.env).NO_COLOR),
       cwd: resolve(base, raw.runtimeCwd ?? "."),
+      ...(raw.runtimeCwd !== undefined ? { runtimeCwd: true } : {}),
       stateRoot: raw.stateDir === undefined ? undefined : resolve(base, raw.stateDir),
       config: raw.config === undefined ? undefined : resolve(base, raw.config),
       keybindings: raw.keybindings,

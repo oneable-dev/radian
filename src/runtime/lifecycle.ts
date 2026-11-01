@@ -12,6 +12,7 @@ import {
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { replySchema, type RuntimeSnapshot } from "./protocol.ts";
+import type { WorkspaceSource } from "./daemon-protocol.ts";
 import {
   daemonPaths,
   privateDirectory,
@@ -31,7 +32,61 @@ export type ConnectOptions = {
   // Activation is independent of SDK-free repository registration.
   start?: boolean;
   register?: boolean;
+  // Production workspace launches pass their source so a daemon they start discovers it first.
+  source?: WorkspaceSource;
+  attachChat?: boolean;
 };
+
+/**
+ * Asks the shared daemon to adopt `source`, re-read its configuration and rediscover current
+ * members. Resolves after the daemon has prepared that catalog; returns its snapshot and any
+ * accepted-with-warning notices (discovery, restoration or persistence).
+ */
+export async function prepareWorkspace(
+  source: WorkspaceSource,
+  options: ConnectOptions = {},
+  attachChat = false,
+): Promise<Result<{ snapshot: RuntimeSnapshot; warnings: string[] }, ExpectedError>> {
+  const daemon = await ensureSharedDaemon({ ...options, source, attachChat });
+  if (!daemon.ok) return daemon;
+  if (!daemon.value.capabilities?.includes("workspace-source")) {
+    return err(
+      new ProtocolError(
+        "Running shared daemon predates workspace discovery. Finish its work, then run `radian runtime restart`.",
+      ),
+    );
+  }
+
+  const paths = daemonPaths(options.offline ?? false, options.stateRoot);
+  const response = await transport(paths, "/workspace", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Radian-Instance": daemon.value.instance },
+    body: JSON.stringify({ source, ...(attachChat ? { attachChat: true } : {}) }),
+    // Discovery of large roots can take longer than ordinary commands.
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!response.ok) return response;
+  const body = await readJson(response.value);
+  if (!body.ok) return body;
+  if (!Value.Check(replySchema, body.value)) {
+    return err(new ProtocolError("Malformed workspace refresh reply; outcome may be unknown."));
+  }
+  if (!body.value.ok) return err(remoteError(body.value.error));
+
+  const warnings = body.value.warnings?.map((warning) => warning.message) ?? [];
+  const fetched = await fetchSnapshot(paths);
+  if (!fetched.ok) return fetched;
+  if (!fetched.value || fetched.value.instance !== daemon.value.instance) {
+    return err(
+      new ConnectionError(
+        "RUNTIME_ABSENT",
+        "Shared daemon changed while preparing the workspace. Reopen radian.",
+      ),
+    );
+  }
+
+  return ok({ snapshot: fetched.value, warnings });
+}
 
 // This lifecycle facade may start an absent owner. RuntimeClient itself only talks
 // to existing endpoints; callers explicitly choose this connector when bootstrapping.
@@ -165,7 +220,11 @@ export async function ensureSharedDaemon(
     if (fetched.value) {
       const identity = sharedIdentity(fetched.value, options.offline ?? false);
       if (!identity.ok) return identity;
-      if (!fetched.value.capabilities?.includes("daemon-stopping")) return identity;
+      if (
+        !fetched.value.capabilities?.includes("daemon-stopping") &&
+        !fetched.value.capabilities?.includes("daemon-starting")
+      )
+        return identity;
     } else if (!child || child.exitCode !== null) {
       if (child?.exitCode !== undefined && child.exitCode !== null && child.exitCode !== 0) {
         return err(
@@ -215,6 +274,15 @@ function launchSharedDaemon(
         const args = ["--runtime-service"];
         if (options.stateRoot) args.push("--state-dir", resolve(options.stateRoot));
         if (options.offline) args.push("--test-runtime");
+        if (options.attachChat) args.push("--runtime-attach-chat");
+        // Implicit default files stay implicit; only explicit selections become flags.
+        if (options.source) {
+          if (options.source.settings.explicit) args.push("--config", options.source.settings.path);
+          if (options.source.workspace.explicit) {
+            args.push("--workspace-config", options.source.workspace.path);
+          }
+          args.push("--runtime-cwd", options.source.cwd);
+        }
         const [executable, ...argv] = childCommand(options.launch ?? selfLaunch(), args);
         const child = spawn(executable, argv, {
           detached: true,

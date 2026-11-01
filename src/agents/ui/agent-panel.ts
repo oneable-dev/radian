@@ -110,6 +110,8 @@ export class AgentPanel {
   private worktree: SessionCollection | null = null;
   private promptSessionId: string | null = null;
   private readonly conversations = new Map<string, string>();
+  // Explicitly deleted sessions. Their drafts and history never return, even from late callbacks.
+  private readonly deletedSessions = new Set<string>();
   private syncingDraft = false;
   private disposed = false;
   private composerLayout = "";
@@ -182,9 +184,21 @@ export class AgentPanel {
       changed,
       focusPrompt: () => this.prompt.focus(),
       initialScroll,
-      saveScroll,
+      // A deleted session's viewport is never persisted again, even by a late scroll event.
+      saveScroll: (sessionId, position) => {
+        if (!this.deletedSessions.has(sessionId)) saveScroll(sessionId, position);
+      },
       cacheSessions: true,
       ...transcriptOptions,
+      ...(transcriptOptions.saveView
+        ? {
+            saveView: (sessionId, state) => {
+              if (!this.deletedSessions.has(sessionId)) {
+                transcriptOptions.saveView?.(sessionId, state);
+              }
+            },
+          }
+        : {}),
       passive: transcriptOptions.readOnly ?? false,
       ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}),
       ...(actions.onOpenTranscriptUrl ? { openUrl: actions.onOpenTranscriptUrl } : {}),
@@ -300,8 +314,9 @@ export class AgentPanel {
 
   get promptDrafts(): Record<string, string> {
     const drafts = Object.fromEntries(this.drafts);
-    if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value) {
-      drafts[this.promptSessionId] = this.prompt.legacyText;
+    const live = this.livePromptSession();
+    if (live && this.prompt.value) {
+      drafts[live] = this.prompt.legacyText;
     }
 
     return drafts;
@@ -309,11 +324,22 @@ export class AgentPanel {
 
   get promptInputDrafts(): Record<string, PromptDraft> {
     const drafts = structuredClone(Object.fromEntries(this.inputDrafts));
-    if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value) {
-      drafts[this.promptSessionId] = this.prompt.draft;
+    const live = this.livePromptSession();
+    if (live && this.prompt.value) {
+      drafts[live] = this.prompt.draft;
     }
 
     return drafts;
+  }
+
+  // The session whose unsaved input the prompt holds, unless it was disposed or deleted.
+  private livePromptSession(): string | null {
+    const id = this.promptSessionId;
+    if (this.disposed || this.prompt.isDestroyed || !id || this.deletedSessions.has(id)) {
+      return null;
+    }
+
+    return id;
   }
 
   promptDraftFor(id: string): PromptDraft | string | undefined {
@@ -514,7 +540,9 @@ export class AgentPanel {
       visible && !isChatCollection(worktree),
     );
 
-    const session = worktree?.sessions.find((item) => item.id === selectedId);
+    const session = worktree?.sessions.find(
+      (item) => item.id === selectedId && !this.deletedSessions.has(item.id),
+    );
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
     const creationKey =
       worktree && !session && !this.transcriptOptions.readOnly
@@ -657,6 +685,43 @@ export class AgentPanel {
     if (switchedSession) {
       this.publishDrafts();
     }
+  }
+
+  /**
+   * Discards all memory of explicitly deleted sessions before any session switch can save or
+   * publish it: drafts, input history, conversation tracking and later scroll/view saves. A
+   * deleted current session's input is dropped together with its undo history; its cached
+   * transcript is released by the next update, whose open set no longer lists it. Other
+   * sessions, such as an active CHAT conversation, keep their draft, caret and focus.
+   * Publishes nothing.
+   */
+  forgetSessions(ids: ReadonlySet<string>): void {
+    if (this.disposed || !ids.size) {
+      return;
+    }
+
+    for (const id of ids) {
+      this.deletedSessions.add(id);
+      this.drafts.delete(id);
+      this.inputDrafts.delete(id);
+      this.promptHistories.delete(id);
+      this.conversations.delete(id);
+      this.submitting.delete(id);
+    }
+
+    if (this.promptSessionId && ids.has(this.promptSessionId)) {
+      this.completion.hide();
+      this.prompt.cancelPaste();
+      // Detach first so neither this reset nor the next update saves it under the old ID.
+      this.promptSessionId = null;
+      this.syncingDraft = true;
+      try {
+        this.prompt.value = "";
+      } finally {
+        this.syncingDraft = false;
+      }
+    }
+    // Cached transcripts of these sessions are released by the next update's open set.
   }
 
   updateMcp(status: McpStatus | undefined): void {
@@ -825,7 +890,7 @@ export class AgentPanel {
   }
 
   private saveDraft(): void {
-    if (!this.promptSessionId) {
+    if (!this.promptSessionId || this.deletedSessions.has(this.promptSessionId)) {
       return;
     }
     if (this.prompt.value) {

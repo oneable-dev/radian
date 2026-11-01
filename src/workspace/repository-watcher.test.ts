@@ -1,23 +1,23 @@
 import { expect, test } from "bun:test";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitDiscoveryError, discoverRepository } from "./discovery.ts";
-import { RepositoryWatcher } from "./repository-watcher.ts";
-import type { Repository } from "./model.ts";
+import { GitDiscoveryError, discoverRepository, probeRepository } from "./discovery.ts";
+import { RepositoryWatcher, type RepositoryAvailability } from "./repository-watcher.ts";
+import { DeletionTracker, type DeletionReceipt } from "./deletion.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
-import { err, type Result } from "../result.ts";
-import type { ExpectedError } from "../errors.ts";
+import { err } from "../result.ts";
+import { StorageError } from "../errors.ts";
 
 function changes() {
-  const values: Result<Repository, ExpectedError>[] = [];
+  const values: RepositoryAvailability[] = [];
   const errors: unknown[] = [];
   const listeners = new Set<() => void>();
 
   return {
     values,
     errors,
-    receive(result: Result<Repository, ExpectedError>) {
+    receive(result: RepositoryAvailability) {
       values.push(result);
       for (const listener of listeners) {
         listener();
@@ -59,8 +59,11 @@ function changes() {
     },
     includes(path: string) {
       return values.some(
-        (result) => result.ok && result.value.worktrees.some((tree) => tree.path === path),
+        (result) => result.ok && !!result.value?.worktrees.some((tree) => tree.path === path),
       );
+    },
+    latest() {
+      return values.at(-1);
     },
   };
 }
@@ -86,7 +89,7 @@ test("Real Git registration/linked HEAD changes detect without depending on dele
       observed.values.some(
         (result) =>
           result.ok &&
-          result.value.worktrees.some(
+          !!result.value?.worktrees.some(
             (tree) => tree.path === added && tree.branch === "feature/renamed",
           ),
       ),
@@ -95,7 +98,9 @@ test("Real Git registration/linked HEAD changes detect without depending on dele
     await observed.until(() =>
       observed.values.some(
         (result) =>
-          result.ok && !result.value.worktrees.some((tree) => tree.path === fixture.feature),
+          result.ok &&
+          !!result.value &&
+          !result.value.worktrees.some((tree) => tree.path === fixture.feature),
       ),
     );
 
@@ -151,10 +156,10 @@ test("Discovery failures never publish empty lists and recover on subsequent Git
   let fail = true;
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
-    discover: (cwd) =>
+    probe: (cwd) =>
       fail
         ? Promise.resolve(err(new GitDiscoveryError("Fixture scan failure")))
-        : discoverRepository(cwd),
+        : probeRepository(cwd),
   });
   try {
     // A failed scan is observable, without replacing the caller's last valid snapshot.
@@ -166,7 +171,7 @@ test("Discovery failures never publish empty lists and recover on subsequent Git
     await fixture.git(fixture.main, ["switch", "-c", "recovered"]);
     await observed.until(() =>
       observed.values.some(
-        (result) => result.ok && result.value.worktrees[0]?.branch === "recovered",
+        (result) => result.ok && result.value?.worktrees[0]?.branch === "recovered",
       ),
     );
 
@@ -188,7 +193,7 @@ test("Events during discovery serialize rescans and disposal suppresses publicat
   let maximum = 0;
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
-    discover: async (cwd) => {
+    probe: async (cwd) => {
       calls++;
       active++;
       maximum = Math.max(maximum, active);
@@ -197,7 +202,7 @@ test("Events during discovery serialize rescans and disposal suppresses publicat
         await release.promise;
       }
       try {
-        return await discoverRepository(cwd);
+        return await probeRepository(cwd);
       } finally {
         active--;
       }
@@ -211,7 +216,7 @@ test("Events during discovery serialize rescans and disposal suppresses publicat
     release.resolve();
     await observed.until(() =>
       observed.values.some(
-        (result) => result.ok && result.value.worktrees[0]?.branch === "during-scan",
+        (result) => result.ok && result.value?.worktrees[0]?.branch === "during-scan",
       ),
     );
     await watcher.stop();
@@ -238,11 +243,11 @@ test("Disposal waits for active Git queries without late updates to closed scree
   const release = Promise.withResolvers<void>();
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
-    discover: async (cwd) => {
+    probe: async (cwd) => {
       entered.resolve();
       await release.promise;
 
-      return discoverRepository(cwd);
+      return probeRepository(cwd);
     },
   });
   try {
@@ -263,3 +268,230 @@ test("Disposal waits for active Git queries without late updates to closed scree
     await fixture.cleanup();
   }
 });
+
+test("Whole repository deletion publishes confirmed absence and recreation republishes it", async () => {
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+  const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
+    debounceMs: 10,
+  });
+  const moved = join(fixture.directory, "moved-main");
+  try {
+    expectOk(await watcher.start());
+
+    // Deleting the checkout that contains the common directory removes the whole repository.
+    await rename(fixture.main, moved);
+    await observed.until(() => {
+      const latest = observed.latest();
+
+      return latest?.ok === true && latest.value === null;
+    });
+
+    // Restoring it at the same path is observed through the surviving ancestor watch.
+    await rename(moved, fixture.main);
+    await observed.until(() => {
+      const latest = observed.latest();
+
+      return latest?.ok === true && latest.value?.id === fixture.repository.id;
+    });
+
+    // A second deletion after reappearance is still detected by the rebound watches.
+    await rm(fixture.main, { recursive: true, force: true });
+    await observed.until(() => {
+      const latest = observed.latest();
+
+      return latest?.ok === true && latest.value === null;
+    });
+
+    expect(observed.errors).toEqual([]);
+    expect(observed.values.every((result) => result.ok)).toBe(true);
+  } finally {
+    await watcher.stop();
+    await fixture.cleanup();
+  }
+});
+
+test("Externally deleted linked checkouts leave the catalog while Git still registers them", async () => {
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+  const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
+    debounceMs: 10,
+  });
+  try {
+    expectOk(await watcher.start());
+
+    // Removing the directory without `git worktree remove` keeps the registration in place.
+    await rm(fixture.feature, { recursive: true, force: true });
+    await observed.until(() => {
+      const latest = observed.latest();
+
+      return (
+        latest?.ok === true &&
+        !!latest.value &&
+        latest.value.worktrees.every((tree) => tree.path !== fixture.feature)
+      );
+    });
+
+    const latest = observed.latest();
+    expect(latest?.ok && latest.value?.worktrees.map((tree) => tree.path)).toEqual([fixture.main]);
+    expect(observed.errors).toEqual([]);
+  } finally {
+    await watcher.stop();
+    await fixture.cleanup();
+  }
+});
+
+test("Permission failures publish typed errors without claiming absence and then recover", async () => {
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+  const locked = join(fixture.directory, "locked");
+  const checkout = join(locked, "checkout");
+  await mkdir(locked);
+  await fixture.git(fixture.main, ["worktree", "add", "-b", "feature/locked", checkout]);
+
+  const repository = expectOk(await discoverRepository(fixture.main));
+  const watcher = new RepositoryWatcher(repository, observed.receive, observed.unexpected, {
+    debounceMs: 10,
+  });
+  try {
+    expectOk(await watcher.start());
+
+    // An unsearchable parent makes the checkout uninspectable, which is not proof of deletion.
+    await chmod(locked, 0);
+    await fixture.git(fixture.main, ["switch", "-c", "while-unreadable"]);
+    await observed.until(() => observed.values.some((result) => !result.ok));
+
+    const failure = observed.values.find((result) => !result.ok);
+    expect(failure?.ok === false && failure.error).toBeInstanceOf(StorageError);
+    expect(failure?.ok === false && (failure.error as StorageError).systemCode).toBe("EACCES");
+    expect(observed.values.some((result) => result.ok && result.value === null)).toBe(false);
+
+    await chmod(locked, 0o755);
+    await fixture.git(fixture.main, ["switch", "-c", "readable-again"]);
+    await observed.until(() => {
+      const latest = observed.latest();
+
+      return latest?.ok === true && latest.value?.worktrees[0]?.branch === "readable-again";
+    });
+
+    const latest = observed.latest();
+    expect(latest?.ok && latest.value?.worktrees.map((tree) => tree.path)).toEqual([
+      fixture.main,
+      fixture.feature,
+      checkout,
+    ]);
+    expect(observed.errors).toEqual([]);
+  } finally {
+    await chmod(locked, 0o755);
+    await watcher.stop();
+    await fixture.cleanup();
+  }
+});
+
+test("Unexpected probe failures keep their original error instead of availability results", async () => {
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+  const bug = new Error("Fixture programming error");
+  const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
+    debounceMs: 10,
+    probe: () => Promise.reject(bug),
+  });
+  try {
+    expectOk(await watcher.start());
+    // `until` rejects with the first unexpected error reported by the watcher.
+    await expect(observed.until(() => false)).rejects.toBe(bug);
+    await watcher.stop();
+
+    // Programming errors keep their identity instead of becoming ordinary availability results.
+    expect(observed.errors).toEqual([bug]);
+    expect(observed.values).toEqual([]);
+  } finally {
+    await watcher.stop();
+    await fixture.cleanup();
+  }
+});
+
+test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "Deletion evidence is drained on invalidation even when Git metadata disappears first",
+  async () => {
+    const fixture = await createWorktreeFixture();
+    const observed = changes();
+    const tracker = new DeletionTracker();
+    const receipts: DeletionReceipt[] = [];
+    tracker.onReceipt((receipt) => receipts.push(receipt));
+    const watcher = new RepositoryWatcher(
+      fixture.repository,
+      observed.receive,
+      observed.unexpected,
+      {
+        debounceMs: 10,
+        deletion: tracker,
+      },
+    );
+    try {
+      expectOk(await watcher.start());
+
+      // `rm -rf` removes `.git` before the checkout, so Git probes may fail mid-deletion.
+      await rm(fixture.main, { recursive: true, force: true });
+      await observed.until(() => receipts.length > 0);
+
+      expect(receipts.map((receipt) => receipt.kind)).toEqual(["repository"]);
+      expect(receipts[0]?.scopes.map((scope) => scope.worktreeId).sort()).toEqual(
+        [fixture.feature, fixture.main].sort(),
+      );
+      // Availability keeps its own contract; evidence is reported separately.
+      await observed.until(() => {
+        const latest = observed.latest();
+
+        return latest?.ok === true && latest.value === null;
+      });
+      expect(observed.errors).toEqual([]);
+    } finally {
+      await watcher.stop();
+      tracker.close();
+      await fixture.cleanup();
+    }
+  },
+);
+
+test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "Renaming a watched repository away yields absence without deletion evidence",
+  async () => {
+    const fixture = await createWorktreeFixture();
+    const observed = changes();
+    const tracker = new DeletionTracker();
+    const watcher = new RepositoryWatcher(
+      fixture.repository,
+      observed.receive,
+      observed.unexpected,
+      {
+        debounceMs: 10,
+        deletion: tracker,
+      },
+    );
+    try {
+      expectOk(await watcher.start());
+
+      await rename(fixture.main, join(fixture.directory, "moved-main"));
+      await observed.until(() => {
+        const latest = observed.latest();
+
+        return latest?.ok === true && latest.value === null;
+      });
+      // Deleting the moved copy is not evidence about the original location either.
+      await rm(join(fixture.directory, "moved-main"), { recursive: true, force: true });
+      await writeFile(join(fixture.directory, "touch"), "");
+      tracker.collect();
+
+      expect(tracker.receipts()).toEqual([]);
+      // The watcher leaves the caller-owned tracker open for a later owner.
+      expect(tracker.scopeIdentity(fixture.repository.id, fixture.feature)).not.toBeNull();
+      await watcher.stop();
+      expect(tracker.scopeIdentity(fixture.repository.id, fixture.feature)).not.toBeNull();
+    } finally {
+      await watcher.stop();
+      tracker.close();
+      await fixture.cleanup();
+    }
+  },
+);

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectError, expectOk } from "../testing/results.ts";
 import {
+  deleteTaskPlanForPurge,
   parseStoredTaskPlan,
   planFilePath,
   readTaskPlan,
@@ -295,6 +296,44 @@ test("Symlinks, mismatched SDK headers, and nonexistent parent paths do not crea
       expectError(await saveTaskPlan(join(app.root, "missing", "x.jsonl"), app.owner, plan, review))
         .code,
     ).toBe("STORAGE_FAILED");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Workspace purge removes only a sidecar whose owner matches the SDK original", async () => {
+  // A deleted scope's plan is Radian-owned; the SDK original stays for its own owner to decide.
+  const app = await fixture();
+  try {
+    expectOk(await saveTaskPlan(app.sessionFile, app.owner, plan, review));
+    const stranger = { conversationId: "other", cwd: app.root };
+
+    expect(expectError(await deleteTaskPlanForPurge(app.sessionFile, stranger)).code).toBe(
+      "STORAGE_FAILED",
+    );
+    expect(expectOk(await deleteTaskPlanForPurge(app.sessionFile, app.owner))).toBe("removed");
+    expect(expectOk(await deleteTaskPlanForPurge(app.sessionFile, app.owner))).toBe("absent");
+
+    expect(await readFile(app.sessionFile, "utf8")).toContain('"type":"session"');
+  } finally {
+    await app.close();
+  }
+});
+
+test("Workspace purge keeps a sidecar whose SDK original now names another conversation", async () => {
+  // A replaced original is not evidence that the earlier plan may be deleted.
+  const app = await fixture();
+  try {
+    expectOk(await saveTaskPlan(app.sessionFile, app.owner, plan, review));
+    await writeFile(
+      app.sessionFile,
+      JSON.stringify({ type: "session", id: "replacement", cwd: app.root }) + "\n",
+    );
+
+    expect(expectError(await deleteTaskPlanForPurge(app.sessionFile, app.owner)).code).toBe(
+      "STORAGE_FAILED",
+    );
+    expect(await stat(planFilePath(app.sessionFile))).toBeTruthy();
   } finally {
     await app.close();
   }

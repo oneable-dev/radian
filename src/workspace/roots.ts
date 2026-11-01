@@ -1,8 +1,8 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { capture, InputError, StorageError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { discoverRepository } from "./discovery.ts";
+import { discoverOptionalRepository, discoverRepository } from "./discovery.ts";
 import type { WorkspaceConfig } from "./config.ts";
 import type { Repository } from "./model.ts";
 
@@ -23,6 +23,19 @@ const excludedDirectories = new Set([
   "__pycache__",
 ]);
 const maximumDirectories = 10000;
+
+function scanDirectory(name: string): boolean {
+  return !name.startsWith(".") && !excludedDirectories.has(name);
+}
+
+// Explicit roots bypass child-name exclusions, but descendants follow the scanner's exact rules.
+export function workspacePathIsReachable(root: string, path: string, maxDepth: number): boolean {
+  const suffix = relative(root, path);
+  if (suffix === "") return true;
+  if (isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${sep}`)) return false;
+  const parts = suffix.split(sep);
+  return parts.length <= maxDepth && parts.every(scanDirectory);
+}
 
 // Scan directory containers, not repository contents. Git owns the full linked-worktree list.
 export async function discoverWorkspace(
@@ -90,15 +103,32 @@ export async function discoverWorkspace(
     }
     for (const child of children.value.sort((a, b) => a.name.localeCompare(b.name))) {
       // Child symlinks are deliberately not followed; explicitly configured roots may be symlinks.
-      if (
-        child.isDirectory() &&
-        !child.name.startsWith(".") &&
-        !excludedDirectories.has(child.name)
-      ) {
+      if (child.isDirectory() && scanDirectory(child.name)) {
         queue.push({ path: join(current.path, child.name), depth: current.depth + 1 });
       }
     }
   }
 
   return ok({ repositories: [...repositories.values()], warnings });
+}
+
+/**
+ * Determines current workspace membership from configuration and the filesystem/Git only.
+ * `roots: []` selects the repository containing `cwd`, or none outside Git. Restoration
+ * metadata such as previously persisted paths never contributes candidates.
+ */
+export async function discoverConfiguredWorkspace(
+  config: WorkspaceConfig,
+  cwd: string,
+): Promise<Result<WorkspaceDiscovery, ExpectedError>> {
+  if (config.roots.length) {
+    return discoverWorkspace(config);
+  }
+
+  const discovered = await discoverOptionalRepository(cwd);
+  if (!discovered.ok) {
+    return discovered;
+  }
+
+  return ok({ repositories: discovered.value ? [discovered.value] : [], warnings: [] });
 }

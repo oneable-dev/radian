@@ -40,7 +40,7 @@ import type { ProviderUsage } from "../../usage/model.ts";
 import { Messages, messageText, type Message, type NoticeOptions } from "../../ui/messages.ts";
 import { MessagesPanel } from "../../ui/messages-panel.ts";
 import { formatRunDuration } from "../../agents/ui/run-completion.ts";
-import { TextDialog } from "../../ui/text-dialog.ts";
+import { TextDialog, type DialogContent } from "../../ui/text-dialog.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
 import { POPUP_SIZES, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { SearchInput } from "../../ui/search-input.ts";
@@ -172,6 +172,11 @@ export class Workbench {
   private lastScrolledKey: string | null = null;
   private navigationRevealPending = false;
   private activeWorktreeId: string | null = null;
+  // Set by an explicit deletion while a Code view is shown; the next render falls back to the
+  // existing CHAT view if no workspace remains.
+  private chatFallbackPending = false;
+  // Workspace scope of the open details dialog (an input attachment or Git preview), if any.
+  private dialogScope: { sessionId?: string | null; worktreeId?: string | null } | undefined;
   private readonly unsubscribe: () => void;
   private disposed = false;
   private readonly theme: UiTheme;
@@ -322,7 +327,7 @@ export class Workbench {
       ...(actions.onDashboard ? { load: actions.onDashboard } : {}),
       ...(actions.onResources ? { resources: actions.onResources } : {}),
       ...(actions.onWorkspaceResources ? { workspaces: actions.onWorkspaceResources } : {}),
-      details: (content) => this.dialog.show(content),
+      details: (content) => this.showScopedDialog(content, {}),
       visibilityChanged: () => this.render(),
       projects: () =>
         this.selection.snapshot.map((repository) => ({ id: repository.id, name: repository.name })),
@@ -349,7 +354,8 @@ export class Workbench {
             this.appView === "chat" ? (actions.getChat?.() ?? null) : this.selection.worktree,
           ),
         onShowDashboard: () => this.dashboard.show(),
-        onInspectInput: (content) => this.dialog.show(content),
+        onInspectInput: (content) =>
+          this.showScopedDialog(content, { sessionId: this.agent.sessionId }),
         onSelectSession: (tree, id) => this.activateSession(tree, id),
       },
       (label, activate, actionLabel) => this.button(label, activate, actionLabel),
@@ -419,7 +425,8 @@ export class Workbench {
       },
       this.workViews.gitViews ?? {},
       (command, context) => this.keymap.hint(command, context),
-      (content) => this.dialog.show(content),
+      (content) =>
+        this.showScopedDialog(content, { worktreeId: this.selection.worktree?.id ?? null }),
     );
     this.workPanel.add(this.agent.root);
     this.workPanel.add(this.editor.root);
@@ -502,6 +509,77 @@ export class Workbench {
 
   get chatSessionId(): string | null {
     return this.selectedChatSessionId;
+  }
+
+  /**
+   * Discards UI memory of explicitly deleted worktrees and sessions before the next snapshot is
+   * rendered: drafts, input history, viewports, folds, Git/terminal selections and active views.
+   * Nothing is published here; the caller persists once the replacement snapshot is applied.
+   * If a Code view was showing and no workspace remains after that snapshot, the existing CHAT
+   * view is shown. CHAT state and unrelated scopes are untouched.
+   */
+  forgetWorkspaces(deletion: {
+    readonly worktreeIds: ReadonlySet<string>;
+    readonly sessionIds: ReadonlySet<string>;
+  }): void {
+    if (this.disposed) {
+      return;
+    }
+
+    const sessionIds = new Set(deletion.sessionIds);
+    for (const tree of this.selection.snapshot.flatMap((repo) => repo.worktrees)) {
+      if (deletion.worktreeIds.has(tree.id)) {
+        for (const session of tree.sessions) {
+          sessionIds.add(session.id);
+        }
+      }
+    }
+
+    // Late creation callbacks of a deleted generation must not claim focus in a recreated one.
+    // A pending CHAT creation is unrelated and keeps its claim.
+    if (this.appView !== "chat") {
+      this.sessionCreationIntent++;
+    }
+    const selectedId = this.selection.worktree?.id;
+    if (
+      this.history.visible &&
+      this.appView !== "chat" &&
+      selectedId &&
+      deletion.worktreeIds.has(selectedId)
+    ) {
+      this.history.hide(false);
+    }
+    this.agent.forgetSessions(sessionIds);
+    for (const id of deletion.worktreeIds) {
+      delete this.workViews.active[id];
+      delete this.workViews.terminalSelection?.[id];
+      delete this.workViews.gitViews?.[id];
+    }
+    for (const id of sessionIds) {
+      delete this.workViews.agentScroll[id];
+      delete this.workViews.agentViews?.[id];
+      this.acknowledgements.delete(id);
+    }
+    const scope = this.dialogScope;
+    if (
+      this.dialog.visible &&
+      scope &&
+      ((scope.sessionId && sessionIds.has(scope.sessionId)) ||
+        (scope.worktreeId && deletion.worktreeIds.has(scope.worktreeId)))
+    ) {
+      this.dialog.hide();
+    }
+    if (this.appView !== "chat" && this.actions.getChat) {
+      this.chatFallbackPending = true;
+    }
+  }
+
+  private showScopedDialog(
+    content: DialogContent,
+    scope: { sessionId?: string | null; worktreeId?: string | null },
+  ): void {
+    this.dialog.show(content);
+    this.dialogScope = scope;
   }
 
   selectChatSession(id: string): void {
@@ -1044,7 +1122,7 @@ export class Workbench {
     const text = keymapHelp(this.keymap, context, (command) => this.commandAvailable(command));
 
     this.extension.suspend();
-    this.dialog.show({ title: "Keyboard help", text });
+    this.showScopedDialog({ title: "Keyboard help", text }, {});
   }
 
   private showNotice(): void {
@@ -1053,11 +1131,14 @@ export class Workbench {
   }
 
   private showMessage(message: Message): void {
-    this.dialog.show({
-      title: message.title ?? "Message details",
-      text: messageText(message.text),
-      copyText: message.text,
-    });
+    this.showScopedDialog(
+      {
+        title: message.title ?? "Message details",
+        text: messageText(message.text),
+        copyText: message.text,
+      },
+      {},
+    );
   }
 
   refreshHistory(): void {
@@ -2205,6 +2286,17 @@ export class Workbench {
       this.selectedChatSessionId = null;
       this.actions.onChatSessionChange?.(null);
     }
+    let fellBackToChat = false;
+    if (this.chatFallbackPending) {
+      this.chatFallbackPending = false;
+      if (!worktree && this.appView !== "chat") {
+        fellBackToChat = true;
+        // Reuse the existing CHAT view and its selected conversation; nothing is created.
+        this.sessionCreationIntent++;
+        this.appView = "chat";
+        this.actions.onViewChange?.("chat");
+      }
+    }
     const workView = worktree ? (this.workViews.active[worktree.id] ?? "agent") : "agent";
     this.displayedWorkView = workView;
     const showingChat = this.appView === "chat";
@@ -2278,7 +2370,21 @@ export class Workbench {
     }
 
     this.lastScrolledKey = this.navigationKey;
+    if (fellBackToChat && !this.focusVisible()) {
+      // Focus was inside the hidden Code view; an open popup keeps its own focus.
+      this.focusWorkView();
+    }
     this.updateFooter();
+  }
+
+  private focusVisible(): boolean {
+    let focused = this.renderer.currentFocusedRenderable ?? null;
+    let visible = !!focused && !focused.isDestroyed;
+    for (; focused; focused = focused.parent as Renderable | null) {
+      visible &&= focused.visible;
+    }
+
+    return visible;
   }
 
   private refreshExtensionUi(): void {

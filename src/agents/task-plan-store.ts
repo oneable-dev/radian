@@ -372,6 +372,38 @@ export function deleteTaskPlanForRetention(
   );
 }
 
+/**
+ * Removes the Radian-owned plan sidecar of a deleted workspace conversation.
+ *
+ * The sidecar must name exactly `owner`. When the SDK original still exists, its header must
+ * name the same owner too; a definitely absent original leaves the sidecar's own owner record
+ * as the evidence. The SDK original itself is never touched here.
+ */
+export function deleteTaskPlanForPurge(
+  sessionFile: string,
+  owner: PlanOwner,
+): Promise<Result<"removed" | "absent", ExpectedError>> {
+  return serialized(planFilePath(sessionFile), async () => {
+    const inspected = await inspectSidecar(sessionFile, owner);
+    if (!inspected.ok) return inspected;
+    if (!inspected.value) return ok("absent" as const);
+
+    const sdk = await inspectSdkOwner(sessionFile, owner);
+    if (!sdk.ok && !(sdk.error instanceof StorageError && sdk.error.systemCode === "ENOENT")) {
+      return sdk;
+    }
+
+    const expected: InspectedTaskPlan = {
+      kind: "ready",
+      fingerprint: inspected.value.fingerprint,
+      updatedAt: inspected.value.plan.updatedAt,
+    };
+    const removed = await removeIfUnchanged(sessionFile, owner, expected);
+
+    return removed.ok ? ok("removed" as const) : removed;
+  });
+}
+
 export function saveTaskPlan(
   sessionFile: string,
   owner: PlanOwner,

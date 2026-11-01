@@ -20,10 +20,20 @@ import {
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { defaultPreferences, type RuntimeClient } from "./client.ts";
-import { connectChatRuntime, connectRuntime, type ConnectOptions } from "./lifecycle.ts";
+import {
+  connectChatRuntime,
+  connectRuntime,
+  prepareWorkspace,
+  type ConnectOptions,
+} from "./lifecycle.ts";
+import type { WorkspaceSource } from "./daemon-protocol.ts";
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths, RuntimeStore } from "./storage.ts";
-import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
+import {
+  mergeWorkspacePreferences,
+  repositoryPreferences,
+  scrubPreferences,
+} from "./workspace-preferences.ts";
 import type { ProcessResourceSample } from "../usage/process-resources.ts";
 import type { WorkspaceResourceScope } from "../usage/workspace-resources.ts";
 
@@ -103,10 +113,25 @@ export type WorkspaceSnapshot = Pick<
   | "editors"
   | "terminals"
   | "extensionUi"
+  | "deletedScopes"
 >;
+
+// Failures that leave no daemon to attach to; other refresh rejections attach with a notice.
+const fatalRefreshCodes = new Set([
+  "CONNECTION_FAILED",
+  "CONNECTION_TIMEOUT",
+  "RUNTIME_ABSENT",
+  "PROTOCOL_ERROR",
+]);
 
 export class WorkspaceClient {
   private readonly entries: Entry[];
+  // True when the shared daemon owns membership and this client only mirrors its catalog.
+  private managed = false;
+  private ready = false;
+  private refreshNotice = "";
+  private readonly adding = new Map<string, Promise<void>>();
+  private readonly releasing = new Set<Promise<void>>();
   private readonly listeners = new Set<() => void>();
   private preferences = defaultPreferences();
   private detaching = false;
@@ -115,34 +140,243 @@ export class WorkspaceClient {
   private chatClient: RuntimeClient | undefined;
   private chatUnsubscribe: (() => void) | undefined;
   private chatConnectionVersion = 0;
+  // Explicit deletion summaries already applied, by cleanup token. Cold, unavailable and
+  // disconnected repositories are never treated as deleted.
+  private readonly appliedDeletions = new Map<string, { revision: number; scrubbed: boolean }>();
+  // Deleted worktree ID to the repository whose receipt deleted it. The ID is a path that another
+  // repository may own now; that repository's state at the same ID is never scrubbed.
+  private readonly deletedWorktrees = new Map<string, string>();
+  private readonly deletedSessions = new Set<string>();
 
   private constructor(
     repositories: readonly Repository[],
     private readonly options: ConnectOptions,
     private readonly connect: Connector,
   ) {
-    this.entries = repositories.map((repository) => ({
+    this.entries = repositories.map((repository) => this.entry(repository));
+  }
+
+  private entry(repository: Repository): Entry {
+    return {
       repository,
       preferences: defaultPreferences(),
       connectionVersion: 0,
       sessions: new Set(),
       editors: new Set(),
       terminals: new Set(),
-    }));
+    };
   }
 
-  static async open(
+  // Shared daemon membership: current repositories plus unavailable ones that keep resources.
+  private listedRepositories(): Map<string, Repository | null> {
+    const shared = this.chatClient?.snapshot;
+    const listed = new Map<string, Repository | null>(
+      (shared?.repositories ?? []).map((repository) => [repository.id, repository]),
+    );
+    for (const id of shared?.unavailableRepositories ?? []) {
+      if (!listed.has(id)) {
+        listed.set(id, null);
+      }
+    }
+
+    return listed;
+  }
+
+  /**
+   * Applies explicit deletion summaries from the shared daemon: deleted worktrees and sessions
+   * are scrubbed from memory, and later preference saves cannot write them back. A reopened
+   * scope admits a fresh generation; only its old sessions stay deleted.
+   */
+  private applyDeletions(): void {
+    const scopes = this.chatClient?.snapshot.deletedScopes?.scopes ?? [];
+    const worktrees = new Map<string, string>();
+    const sessionIds = new Set<string>();
+    for (const scope of scopes) {
+      const applied = this.appliedDeletions.get(scope.token);
+      if (applied && applied.revision >= scope.revision) continue;
+
+      const reopened = scope.state === "reopened";
+      // Worktree state is scrubbed once per deletion; a reopened worktree is a new generation.
+      if (!applied?.scrubbed) {
+        for (const id of scope.worktreeIds) worktrees.set(id, scope.repositoryId);
+      }
+      for (const id of scope.worktreeIds) {
+        if (reopened) this.deletedWorktrees.delete(id);
+        else this.deletedWorktrees.set(id, scope.repositoryId);
+      }
+      for (const id of scope.sessionIds) {
+        sessionIds.add(id);
+        this.deletedSessions.add(id);
+      }
+      this.appliedDeletions.set(scope.token, { revision: scope.revision, scrubbed: true });
+    }
+    if (!worktrees.size && !sessionIds.size) return;
+
+    this.preferences = scrubPreferences(this.preferences, {
+      worktreeIds: this.ownedDeletions(worktrees),
+      sessionIds,
+    });
+    for (const entry of this.entries) {
+      entry.preferences = scrubPreferences(entry.preferences, {
+        worktreeIds: this.ownedDeletions(worktrees, entry.repository.id),
+        sessionIds,
+      });
+      for (const id of sessionIds) entry.sessions.delete(id);
+    }
+  }
+
+  /**
+   * Deleted worktree IDs whose state belongs to the deleting repository. For one repository's
+   * preferences that is its own receipts; for merged preferences, an ID that no other current
+   * repository lists. Keys of a repository that reuses a deleted path are kept.
+   */
+  private ownedDeletions(deleted: ReadonlyMap<string, string>, repositoryId?: string): Set<string> {
+    const owners = new Map<string, string>();
+    for (const entry of this.entries) {
+      for (const tree of entry.repository.worktrees) owners.set(tree.id, entry.repository.id);
+    }
+    for (const repository of this.chatClient?.snapshot.repositories ?? []) {
+      for (const tree of repository.worktrees) owners.set(tree.id, repository.id);
+    }
+
+    const owned = new Set<string>();
+    for (const [id, deleting] of deleted) {
+      const owner = repositoryId ?? owners.get(id);
+      if (owner === undefined || owner === deleting) owned.add(id);
+    }
+
+    return owned;
+  }
+
+  // Mirror daemon catalog changes: connect newly prepared repositories, drop released ones.
+  private syncMembership(): void {
+    if (
+      !this.managed ||
+      !this.ready ||
+      this.detaching ||
+      !this.chatClient?.connected ||
+      this.chatClient.snapshot.capabilities?.includes("daemon-starting")
+    ) {
+      return;
+    }
+
+    const listed = this.listedRepositories();
+    for (const [id, repository] of listed) {
+      if (!repository || this.adding.has(id) || this.entries.some((e) => e.repository.id === id)) {
+        continue;
+      }
+
+      const adding = this.addEntry(repository)
+        .catch((error: unknown) => {
+          this.refreshNotice = reportUnexpected(error, "workspace membership");
+          this.emit();
+        })
+        .finally(() => {
+          this.adding.delete(id);
+          this.syncMembership();
+        });
+      this.adding.set(id, adding);
+    }
+    const released = this.entries.filter(
+      (entry) => !listed.has(entry.repository.id) && !entry.pending,
+    );
+    for (const entry of released) {
+      this.entries.splice(this.entries.indexOf(entry), 1);
+      entry.watcher?.close();
+      entry.unsubscribe?.();
+      const disconnected = (entry.saving ?? Promise.resolve(ok(undefined)))
+        .then(() => entry.client?.disconnect())
+        .catch((error: unknown) => {
+          reportUnexpected(error, "released repository disconnect");
+        });
+      this.releasing.add(disconnected);
+      void disconnected.finally(() => this.releasing.delete(disconnected));
+      this.emit();
+    }
+  }
+
+  private async addEntry(repository: Repository): Promise<void> {
+    const entry = this.entry(repository);
+    await this.load(entry);
+    if (
+      this.detaching ||
+      this.chatClient?.snapshot.capabilities?.includes("daemon-starting") ||
+      !this.listedRepositories().has(repository.id)
+    ) {
+      entry.unsubscribe?.();
+      await entry.client?.disconnect();
+
+      return;
+    }
+
+    this.entries.push(entry);
+    // Existing workspace values win; the new repository contributes its saved drafts and views.
+    this.preferences = mergeWorkspacePreferences(
+      [entry.preferences, this.preferences],
+      this.preferences.selection.worktreeId,
+    );
+    this.emit();
+  }
+
+  /**
+   * Production entry point: asks the shared daemon to rediscover `source` and mirrors the
+   * membership it prepared. The TUI never registers or decides a competing repository list;
+   * later catalog changes arrive through the shared daemon snapshot.
+   */
+  static async attach(
+    source: WorkspaceSource,
+    options: ConnectOptions,
+    connect: Connector = connectRuntime,
+  ): Promise<Result<WorkspaceClient, ExpectedError>> {
+    const prepared = await prepareWorkspace(source, options, true);
+    let notice = "";
+    if (!prepared.ok) {
+      if (fatalRefreshCodes.has(prepared.error.code)) {
+        return prepared;
+      }
+
+      // The refresh was rejected without changes (for example a policy conflict); show the
+      // daemon's current catalog rather than inventing a local one.
+      notice = `Workspace refresh [${prepared.error.code}]: ${prepared.error.message}`;
+    }
+
+    // The source is the single settings selection; CHAT and repository channels must use it too.
+    const configured = { ...options, source };
+    if (source.settings.explicit) configured.config = source.settings.path;
+    else delete configured.config;
+    return WorkspaceClient.start([], source.cwd, configured, connect, notice);
+  }
+
+  /**
+   * Low-level entry point with an explicit ad hoc repository list. Each repository is
+   * registered individually; production startup uses `attach` instead.
+   */
+  static open(
     repositories: readonly Repository[],
     cwd: string,
     options: ConnectOptions,
     connect: Connector,
   ): Promise<Result<WorkspaceClient, ExpectedError>> {
-    const workspace = new WorkspaceClient(repositories, options, connect);
+    return WorkspaceClient.start(repositories, cwd, options, connect);
+  }
+
+  private static async start(
+    initial: readonly Repository[],
+    cwd: string,
+    options: ConnectOptions,
+    connect: Connector,
+    notice?: string,
+  ): Promise<Result<WorkspaceClient, ExpectedError>> {
+    const managed = notice !== undefined;
+    const workspace = new WorkspaceClient(initial, options, connect);
     let ready = false;
+
+    workspace.managed = managed;
+    workspace.refreshNotice = notice ?? "";
 
     return withCleanup(
       async () => {
-        if (connect === connectRuntime || !repositories.length) {
+        if (managed || connect === connectRuntime || !initial.length) {
           const chat = await connectChatRuntime(options);
           if (!chat.ok) return chat;
           workspace.chatClient = chat.value;
@@ -153,9 +387,20 @@ export class WorkspaceClient {
               workspace.chatConnectionVersion++;
             }
             wasConnected = chat.value.connected;
+            workspace.applyDeletions();
+            workspace.syncMembership();
             workspace.emit();
           });
         }
+        if (managed) {
+          for (const repository of workspace.listedRepositories().values()) {
+            if (repository) {
+              workspace.entries.push(workspace.entry(repository));
+            }
+          }
+        }
+
+        const repositories = workspace.entries.map((entry) => entry.repository);
         let cursor = 0;
         const loaded = await Promise.allSettled(
           Array.from({ length: Math.min(4, repositories.length) }, async () => {
@@ -194,7 +439,11 @@ export class WorkspaceClient {
           workspace.entries.map((entry) => entry.preferences),
           selected,
         );
+        workspace.appliedDeletions.clear();
+        workspace.applyDeletions();
         ready = true;
+        workspace.ready = true;
+        workspace.syncMembership();
 
         return ok(workspace);
       },
@@ -215,28 +464,31 @@ export class WorkspaceClient {
     }
 
     // Register metadata with the shared daemon without allocating repository execution resources.
+    // A daemon-owned catalog is attached as prepared, never registered by this client.
     const connected = await this.connect(entry.repository, this.cwd(entry), {
       ...this.options,
       start: false,
-      register: true,
+      register: !this.managed,
     });
     if (!connected.ok) {
       entry.error = connected.error;
     } else if (connected.value) {
       this.bind(entry, connected.value);
     }
-    if (!entry.client) {
+    if (!entry.client && !this.managed) {
       entry.watcher = new RepositoryWatcher(
         entry.repository,
         (result) => {
           if (this.detaching || entry.client) {
             return;
           }
-          if (result.ok) {
+          if (!result.ok) {
+            entry.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+          } else if (result.value) {
             entry.repository = result.value;
             delete entry.discoveryWarning;
           } else {
-            entry.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+            entry.discoveryWarning = "Repository is missing; previous entries were retained.";
           }
 
           this.emit();
@@ -300,12 +552,21 @@ export class WorkspaceClient {
     );
 
     return {
-      repositories: this.entries.map(
-        (entry) =>
-          entry.client?.snapshot.repositories.find((repo) => repo.id === entry.repository.id) ??
-          entry.repository,
-      ),
+      repositories: this.entries.flatMap((entry) => {
+        const current = entry.client?.snapshot.repositories.find(
+          (repo) => repo.id === entry.repository.id,
+        );
+        // An unavailable daemon repository lists only rows still owned by resources.
+        if (current || (this.managed && entry.client)) {
+          return current ? [current] : [];
+        }
+
+        return [entry.repository];
+      }),
       ...(this.chatClient?.snapshot.chat ? { chat: this.chatClient.snapshot.chat } : {}),
+      ...(this.chatClient?.snapshot.deletedScopes
+        ? { deletedScopes: structuredClone(this.chatClient.snapshot.deletedScopes) }
+        : {}),
       details: Object.fromEntries([
         ...snapshots.flatMap((snapshot) => Object.entries(snapshot.details)),
         ...Object.entries(this.chatClient?.snapshot.chat?.details ?? {}),
@@ -329,6 +590,7 @@ export class WorkspaceClient {
             ),
           ],
       notice: [
+        this.refreshNotice,
         this.chatClient?.snapshot.notice,
         ...this.entries.flatMap((entry) => {
           const notice =
@@ -1052,7 +1314,15 @@ export class WorkspaceClient {
   }
 
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> {
-    this.preferences = structuredClone(preferences);
+    // A UI that has not processed a deletion yet must not write the deleted state back.
+    this.preferences =
+      this.deletedWorktrees.size || this.deletedSessions.size
+        ? scrubPreferences(preferences, {
+            worktreeIds: this.ownedDeletions(this.deletedWorktrees),
+            sessionIds: this.deletedSessions,
+          })
+        : structuredClone(preferences);
+    preferences = this.preferences;
 
     return collectCleanup(
       this.entries.flatMap((entry) => {
@@ -1132,8 +1402,9 @@ export class WorkspaceClient {
     const watchers = await Promise.allSettled(
       this.entries.flatMap((entry) => (entry.watcher ? [entry.watcher.stop()] : [])),
     );
-    const errors = [...pending, ...writes, ...detached, ...watchers].flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
+    const released = await Promise.allSettled([...this.releasing, ...this.adding.values()]);
+    const errors = [...pending, ...writes, ...detached, ...watchers, ...released].flatMap(
+      (result) => (result.status === "rejected" ? [result.reason] : []),
     );
     if (errors.length) {
       throw new AggregateError(errors, "Workspace detach failed.");

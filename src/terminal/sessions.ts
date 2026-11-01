@@ -31,6 +31,10 @@ export class TerminalSessions {
   private readonly records = new Map<string, TerminalRecord>();
   private readonly numbers = new Map<string, number>();
   private stopping = false;
+  // Removed worktrees reject launches; epochs reject launches begun for an older generation.
+  private readonly fenced = new Set<string>();
+  private readonly epochs = new Map<string, number>();
+  private readonly launching = new Map<Promise<unknown>, string>();
 
   constructor(
     private readonly repositories: RepositorySource,
@@ -56,16 +60,101 @@ export class TerminalSessions {
   }
 
   get retainedWorktreeIds(): ReadonlySet<string> {
-    return new Set([...this.records.values()].map((record) => record.session.info.worktreeId));
+    return new Set([
+      ...[...this.records.values()].map((record) => record.session.info.worktreeId),
+      ...this.launching.values(),
+    ]);
   }
 
-  async create(
+  /** Synchronously blocks terminal launches and I/O for removed worktrees. Idempotent. */
+  fenceWorktrees(worktreeIds: ReadonlySet<string>): void {
+    for (const id of worktreeIds) {
+      if (!this.fenced.has(id)) {
+        this.fenced.add(id);
+        this.epochs.set(id, (this.epochs.get(id) ?? 0) + 1);
+      }
+    }
+  }
+
+  /**
+   * Fences and closes every terminal of removed worktrees, including pending launches and
+   * their owned jobs. Idempotent; terminals whose cleanup failed remain closing and retained.
+   */
+  async destroyWorktrees(worktreeIds: ReadonlySet<string>): Promise<Result<void, ExpectedError>> {
+    this.fenceWorktrees(worktreeIds);
+
+    const matches = (id: string) => worktreeIds.has(id);
+    const launches = [...this.launching]
+      .filter(([, id]) => matches(id))
+      // A launch observing the fence closes its own record; only its settlement matters here.
+      .map(([task]) => task.then(cleanupSettled, cleanupSettled));
+    const closing = [...this.records]
+      .filter(([, record]) => matches(record.session.worktreeId))
+      .map(([id]) => this.close(id));
+    const first = await collectCleanup(
+      [...closing, ...launches],
+      "Could not stop every terminal of the removed worktrees.",
+    );
+    if (!first.ok) {
+      return first;
+    }
+
+    // Launches that failed their own cleanup leave records behind; report them.
+    return collectCleanup(
+      [...this.records]
+        .filter(([, record]) => matches(record.session.worktreeId))
+        .map(([id]) => this.close(id)),
+      "Could not stop every terminal of the removed worktrees.",
+    );
+  }
+
+  /** Opens a new generation for destroyed worktree IDs. Refuses while old terminals remain. */
+  releaseWorktrees(worktreeIds: ReadonlySet<string>): Result<void, ExpectedError> {
+    const retained = this.retainedWorktreeIds;
+    if ([...worktreeIds].some((id) => retained.has(id))) {
+      return err(new PtyError("PTY_BUSY", "The removed worktree terminals are still stopping."));
+    }
+    for (const id of worktreeIds) {
+      this.fenced.delete(id);
+    }
+
+    return ok(undefined);
+  }
+
+  private interrupted(worktreeId: string, epoch: number): boolean {
+    return (
+      this.stopping || this.fenced.has(worktreeId) || (this.epochs.get(worktreeId) ?? 0) !== epoch
+    );
+  }
+
+  create(
+    worktreeId: string,
+    size: { cols: number; rows: number },
+  ): Promise<Result<string, ExpectedError>> {
+    const task = this.createOnce(worktreeId, size);
+    this.launching.set(task, worktreeId);
+    const untrack = () => {
+      this.launching.delete(task);
+    };
+    void task.then(untrack, untrack);
+
+    return task;
+  }
+
+  private async createOnce(
     worktreeId: string,
     size: { cols: number; rows: number },
   ): Promise<Result<string, ExpectedError>> {
     if (this.stopping) {
       return err(new PtyError("PTY_UNAVAILABLE", "Terminal runtime is stopping."));
     }
+    if (this.fenced.has(worktreeId)) {
+      return err(
+        new PtyError("PTY_NOT_OPEN", "This worktree was removed; no terminal was created."),
+      );
+    }
+
+    const epoch = this.epochs.get(worktreeId) ?? 0;
 
     const worktree = repositorySnapshot(this.repositories)
       .flatMap((repo) => repo.worktrees)
@@ -142,14 +231,14 @@ export class TerminalSessions {
 
         record.owner = owner.value;
         await terminalSupervisorHandshake(handshake.ready.promise, "supervisor startup");
-        if (this.stopping || record.phase !== "starting") {
+        if (this.interrupted(worktreeId, epoch) || record.phase !== "starting") {
           throw new PtyError("PTY_UNAVAILABLE", "Terminal creation was interrupted by shutdown.");
         }
 
         record.startSent = true;
         session.process.send({ type: "start", argv: [shell, "-i"], cwd: worktree.path });
         record.shellPid = await terminalSupervisorHandshake(handshake.started.promise, "startup");
-        if (this.stopping || record.phase !== "starting") {
+        if (this.interrupted(worktreeId, epoch) || record.phase !== "starting") {
           throw new PtyError("PTY_UNAVAILABLE", "Terminal creation was interrupted by shutdown.");
         }
         if (session.info.exited) {
@@ -243,6 +332,11 @@ export class TerminalSessions {
 
   private open(id: string): Result<TerminalRecord, PtyError> {
     const record = this.records.get(id);
+    if (record && this.fenced.has(record.session.worktreeId)) {
+      return err(
+        new PtyError("PTY_NOT_OPEN", "This worktree was removed; the terminal was closed."),
+      );
+    }
 
     return record?.phase === "open"
       ? ok(record)
@@ -314,6 +408,10 @@ export class TerminalSessions {
       "Terminal cleanup failed.",
     );
   }
+}
+
+function cleanupSettled(): Result<void, never> {
+  return ok(undefined);
 }
 
 function reportCleanup(task: Promise<Result<void, ExpectedError>>): void {

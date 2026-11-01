@@ -152,3 +152,130 @@ test("Late-connected repositories restore saved sessions without switching curre
   // Opening another repository must not reset selection to first session A1.
   expect(selection.sessionId).toBe("a2");
 });
+
+function tree(id: string, sessions: readonly string[] = [`${id}-s`]) {
+  return {
+    id,
+    path: `/fixture/${id}`,
+    name: id,
+    branch: id,
+    sessions: sessions.map((session) => ({
+      id: session,
+      name: session,
+      status: null,
+      subagents: [],
+    })),
+  };
+}
+
+function workspace(...ids: readonly string[]) {
+  return [{ id: "repo", name: "repo", worktrees: ids.map((id) => tree(id)) }];
+}
+
+function deleteWorktrees(
+  selection: WorkspaceSelection,
+  ids: readonly string[],
+  next = workspace(),
+) {
+  selection.forget({
+    worktreeIds: new Set(ids),
+    sessionIds: new Set(ids.map((id) => `${id}-s`)),
+  });
+  selection.replaceSnapshot(next);
+}
+
+test.each([
+  ["first", "w1", ["w2", "w3"], "w2"],
+  ["middle", "w2", ["w1", "w3"], "w3"],
+  ["last", "w3", ["w1", "w2"], "w2"],
+])(
+  "Deleting the %s selected worktree selects the next survivor, else the previous one",
+  (_position, deleted, surviving, expected) => {
+    // Display order is w1, w2, w3 and the deleted worktree is selected.
+    const selection = new WorkspaceSelection(workspace("w1", "w2", "w3"));
+    selection.selectWorktree(deleted);
+
+    // The daemon explicitly reports the deletion together with the shrunk catalog.
+    deleteWorktrees(selection, [deleted], workspace(...surviving));
+
+    // Following survivors take priority over preceding ones.
+    expect(selection.worktree?.id).toBe(expected);
+  },
+);
+
+test("Deleting an unselected worktree keeps the selection and its remembered session", () => {
+  // w1 remembers its second session while w3 is deleted in the background.
+  const selection = new WorkspaceSelection([
+    { id: "repo", name: "repo", worktrees: [tree("w1", ["a", "b"]), tree("w2"), tree("w3")] },
+  ]);
+  selection.selectSession("w1", "b");
+
+  deleteWorktrees(
+    selection,
+    ["w3"],
+    [{ id: "repo", name: "repo", worktrees: [tree("w1", ["a", "b"]), tree("w2")] }],
+  );
+
+  // Unaffected selection is preserved exactly.
+  expect(selection.worktree?.id).toBe("w1");
+  expect(selection.sessionId).toBe("b");
+  expect(selection.state.sessions).toEqual({ w1: "b", w2: "w2-s" });
+});
+
+test("Deleting every previous worktree selects the first genuinely new row", () => {
+  // A recreated w1 has the old ID but is a new generation, not a survivor.
+  const selection = new WorkspaceSelection(workspace("w1", "w2"));
+  selection.selectWorktree("w1");
+
+  deleteWorktrees(
+    selection,
+    ["w1", "w2"],
+    [{ id: "repo", name: "repo", worktrees: [tree("w1", ["fresh"]), tree("w9", ["other"])] }],
+  );
+
+  // The first new candidate in display order wins, without resuming old sessions.
+  expect(selection.worktree?.id).toBe("w1");
+  expect(selection.sessionId).toBe("fresh");
+});
+
+test("A recreated selected worktree does not keep focus when another worktree survives", () => {
+  // w1 is deleted and immediately recreated at the same path while w2 survives.
+  const selection = new WorkspaceSelection(workspace("w1", "w2"));
+  selection.selectWorktree("w1");
+
+  deleteWorktrees(
+    selection,
+    ["w1"],
+    [{ id: "repo", name: "repo", worktrees: [tree("w1", ["fresh"]), tree("w2")] }],
+  );
+
+  // Old selection intent does not jump into the new generation.
+  expect(selection.worktree?.id).toBe("w2");
+  expect(selection.state.sessions.w1).toBe("fresh");
+});
+
+test("Deleted sessions are never restored or selected again", () => {
+  // The worktree was reopened and the daemon briefly still lists an old session.
+  const selection = new WorkspaceSelection([
+    { id: "repo", name: "repo", worktrees: [tree("w1", ["old", "new"])] },
+  ]);
+  selection.forget({ worktreeIds: new Set(["w1"]), sessionIds: new Set(["old"]) });
+  selection.replaceSnapshot(selection.snapshot, { w1: "old" });
+
+  // Saved intent, explicit selection and restoration all reject the deleted ID.
+  selection.selectSession("w1", "old");
+  selection.restore({ worktreeId: "w1", sessions: { w1: "old" } });
+  expect(selection.sessionId).toBe("new");
+  expect(selection.state.sessions).toEqual({ w1: "new" });
+});
+
+test("Cold snapshots that omit a worktree are not deletions", () => {
+  // w2 is selected, then temporarily missing from a not-ready catalog.
+  const selection = new WorkspaceSelection(workspace("w1", "w2"));
+  selection.selectWorktree("w2");
+  selection.replaceSnapshot(workspace("w1"));
+  selection.replaceSnapshot(workspace("w1", "w2"));
+
+  // Without forget(), the reappearing row is the same generation and keeps its session.
+  expect(selection.state.sessions.w2).toBe("w2-s");
+});

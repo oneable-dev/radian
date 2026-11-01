@@ -11,6 +11,7 @@ import {
   resolveWorkspaceConfig,
   type WorkspaceConfig,
 } from "../workspace/config.ts";
+import type { WorkspaceSource } from "../runtime/daemon-protocol.ts";
 
 export type SessionSettings = { readonly retentionDays: number | null };
 
@@ -33,6 +34,108 @@ type SettingsOptions = {
 const sections = new Set(["theme", "keybindings", "workspace", "sessions"]);
 export const defaultSettingsPath = () =>
   join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "radian", "settings.json");
+const defaultWorkspacePath = () =>
+  join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "radian", "workspace.json");
+
+/**
+ * Builds the minimal workspace reference that the shared daemon remembers.
+ *
+ * Default locations are captured now so a later restart from another environment still
+ * reads the same files. Only references and the launch context are kept; the daemon reads
+ * the latest file contents whenever it discovers membership.
+ */
+export function workspaceSource(options: {
+  config?: string | undefined;
+  workspaceConfig?: string | undefined;
+  cwd: string;
+}): WorkspaceSource {
+  return {
+    settings: {
+      path: resolve(options.config ?? defaultSettingsPath()),
+      explicit: !!options.config,
+    },
+    workspace: {
+      path: resolve(options.workspaceConfig ?? defaultWorkspacePath()),
+      explicit: !!options.workspaceConfig,
+    },
+    cwd: resolve(options.cwd),
+  };
+}
+
+/**
+ * Reads the current workspace configuration selected by a remembered source.
+ *
+ * It applies the same precedence as `loadSettings`: an explicit workspace file, then the
+ * unified `workspace` section, then the legacy workspace file. Explicitly selected files must
+ * exist; implicit defaults may be absent. Offline mode never reads implicit workspace
+ * locations, so isolated test daemons cannot scan a user's real roots. Only the settings
+ * document is parsed here; theme and keymap sections are neither validated nor initialized.
+ */
+export async function loadWorkspaceSource(
+  source: WorkspaceSource,
+  options: { offline: boolean },
+): Promise<Result<WorkspaceConfig, ExpectedError>> {
+  if (source.workspace.explicit) {
+    return loadWorkspaceConfig(source.workspace.path);
+  }
+  if (options.offline && !source.settings.explicit) {
+    return ok({ roots: [], maxDepth: 0 });
+  }
+
+  const loaded = await document(
+    source.settings.explicit ? source.settings.path : undefined,
+    source.settings.path,
+  );
+  if (!loaded.ok) {
+    return loaded;
+  }
+  if (Object.hasOwn(loaded.value.data, "workspace")) {
+    const parsed = parseWorkspaceConfig(loaded.value.data.workspace);
+
+    return parsed.ok
+      ? ok(resolveWorkspaceConfig(parsed.value, loaded.value.path))
+      : err(
+          new InputError(`${loaded.value.path}: ${parsed.error.message}`, { cause: parsed.error }),
+        );
+  }
+  if (options.offline) {
+    return ok({ roots: [], maxDepth: 0 });
+  }
+
+  return loadImplicitWorkspace(source.workspace.path);
+}
+
+// The remembered default workspace file keeps the implicit-missing contract of loadWorkspaceConfig.
+async function loadImplicitWorkspace(
+  path: string,
+): Promise<Result<WorkspaceConfig, ExpectedError>> {
+  const read = await capture(() => readFile(path, "utf8"));
+  if (!read.ok) {
+    return read.error instanceof StorageError && read.error.systemCode === "ENOENT"
+      ? ok(resolveWorkspaceConfig(expectDefaults(), path))
+      : read;
+  }
+
+  const json = parseJson(read.value, path);
+  if (!json.ok) {
+    return json;
+  }
+
+  const parsed = parseWorkspaceConfig(json.value);
+
+  return parsed.ok
+    ? ok(resolveWorkspaceConfig(parsed.value, path))
+    : err(new InputError(`${path}: ${parsed.error.message}`, { cause: parsed.error }));
+}
+
+function expectDefaults(): WorkspaceConfig {
+  const defaults = parseWorkspaceConfig({});
+  if (!defaults.ok) {
+    throw defaults.error;
+  }
+
+  return defaults.value;
+}
 
 export function parseSessionSettings(value: unknown): Result<SessionSettings, InputError> {
   if (
@@ -57,10 +160,11 @@ export function parseSessionSettings(value: unknown): Result<SessionSettings, In
 
 async function document(
   config?: string,
+  implicitPath?: string,
 ): Promise<
   Result<{ path: string; exists: boolean; data: Record<string, unknown> }, ExpectedError>
 > {
-  const path = resolve(config ?? defaultSettingsPath());
+  const path = resolve(config ?? implicitPath ?? defaultSettingsPath());
   const read = await capture(() => readFile(path, "utf8"));
   if (!read.ok) {
     return !config && read.error instanceof StorageError && read.error.systemCode === "ENOENT"
@@ -91,8 +195,9 @@ async function document(
 // Runtime policies deliberately do not load UI-specific legacy files or initialize native UI/SDK code.
 export async function loadSessionSettings(
   config?: string,
+  implicitPath?: string,
 ): Promise<Result<SessionSettings & { path: string; exists: boolean }, ExpectedError>> {
-  const loaded = await document(config);
+  const loaded = await document(config, implicitPath);
   if (!loaded.ok) {
     return loaded;
   }

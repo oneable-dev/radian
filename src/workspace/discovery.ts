@@ -1,8 +1,8 @@
 import { basename, dirname, join, resolve } from "node:path";
 import { lstat, realpath, stat } from "node:fs/promises";
 import type { Repository, Worktree } from "./model.ts";
-import { capture, ExpectedError, StorageError } from "../errors.ts";
-import { err, ok, type Result } from "../result.ts";
+import { capture, ExpectedError, StorageError, systemCode } from "../errors.ts";
+import { ok, type Result } from "../result.ts";
 
 export function parseWorktrees(porcelain: string): Worktree[] {
   const worktrees: Worktree[] = [];
@@ -38,14 +38,60 @@ export function parseWorktrees(porcelain: string): Worktree[] {
   return worktrees;
 }
 
-export class GitDiscoveryError extends ExpectedError {
-  constructor(message: string) {
-    super("GIT_DISCOVERY_FAILED", message);
+/** The first `git worktree list` entry: the main checkout, or the repository itself when bare. */
+export type MainWorktree = { readonly path: string; readonly bare: boolean };
+
+export function parseMainWorktree(porcelain: string): MainWorktree | null {
+  let path: string | null = null;
+  let bare = false;
+  for (const field of porcelain.split("\0")) {
+    if (field === "") {
+      break;
+    } else if (field.startsWith("worktree ")) {
+      if (path !== null) {
+        break;
+      }
+
+      path = field.slice("worktree ".length);
+    } else if (field === "bare") {
+      bare = true;
+    }
+  }
+
+  return path === null ? null : { path, bare };
+}
+
+export class GitDiscoveryError extends ExpectedError<"GIT_DISCOVERY_FAILED"> {
+  constructor(message: string, options?: ErrorOptions) {
+    super("GIT_DISCOVERY_FAILED", message, options);
   }
 }
 
+// Only these codes prove that a path is absent; permission and I/O failures remain errors.
+export function isMissingPath(error: ExpectedError): boolean {
+  return (
+    error instanceof StorageError &&
+    (error.systemCode === "ENOENT" || error.systemCode === "ENOTDIR")
+  );
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
-  const process = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+  let process: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  try {
+    process = Bun.spawn(["git", "-C", cwd, ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    // A missing Git executable must not look like a missing repository path.
+    if (systemCode(error)) {
+      throw new GitDiscoveryError("Git could not be started.", { cause: error });
+    }
+
+    throw error;
+  }
+
   const [output, error, code] = await Promise.all([
     new Response(process.stdout).text(),
     new Response(process.stderr).text(),
@@ -97,6 +143,38 @@ export async function discoverOptionalRepository(
   }
 }
 
+/**
+ * Reads which directory is the repository root besides the common Git directory.
+ * Bare repositories report the common directory itself; separate-git-dir checkouts report
+ * their external main checkout. Git failures stay errors; they never imply absence.
+ */
+export async function readMainWorktree(
+  commonDir: string,
+): Promise<Result<MainWorktree | null, ExpectedError>> {
+  return capture(async () =>
+    parseMainWorktree(await git(commonDir, ["worktree", "list", "--porcelain", "-z"])),
+  );
+}
+
+// Git keeps registrations for checkouts deleted outside Git (and also reports inaccessible
+// ones as prunable), so presence is decided by the checkout directory itself. The `.git`
+// marker is not required: GIT_DIR/core.worktree checkouts legitimately have none.
+async function presentWorktrees(
+  worktrees: readonly Worktree[],
+): Promise<Result<Worktree[], ExpectedError>> {
+  const present: Worktree[] = [];
+  for (const tree of worktrees) {
+    const checkout = await capture(() => stat(tree.path));
+    if (checkout.ok) {
+      present.push(tree);
+    } else if (!isMissingPath(checkout.error)) {
+      return checkout;
+    }
+  }
+
+  return ok(present);
+}
+
 export async function discoverRepository(cwd: string): Promise<Result<Repository, ExpectedError>> {
   const discovered = await capture(async () => {
     const commonDir = await realpath(
@@ -105,8 +183,47 @@ export async function discoverRepository(cwd: string): Promise<Result<Repository
     const worktrees = parseWorktrees(await git(cwd, ["worktree", "list", "--porcelain", "-z"]));
     const mainTree = worktrees[0];
 
-    return { id: commonDir, name: mainTree?.name ?? basename(cwd), worktrees };
+    return { commonDir, name: mainTree?.name ?? basename(cwd), worktrees };
   });
+  if (!discovered.ok) {
+    return discovered;
+  }
 
-  return discovered.ok ? ok(discovered.value) : err(discovered.error);
+  const present = await presentWorktrees(discovered.value.worktrees);
+  if (!present.ok) {
+    return present;
+  }
+
+  const { commonDir, name } = discovered.value;
+
+  return ok({ id: commonDir, name, worktrees: present.value });
+}
+
+/**
+ * Re-reads a known repository or worktree path from the filesystem and Git.
+ *
+ * `ok(null)` means the path itself is confirmed absent (ENOENT/ENOTDIR). Permission,
+ * I/O and Git failures, including a present but corrupted repository, stay errors so
+ * callers can retain their previous state instead of treating the repository as deleted.
+ */
+export async function probeRepository(
+  cwd: string,
+): Promise<Result<Repository | null, ExpectedError>> {
+  const before = await capture(() => stat(cwd));
+  if (!before.ok) {
+    return isMissingPath(before.error) ? ok(null) : before;
+  }
+
+  const discovered = await discoverRepository(cwd);
+  if (discovered.ok) {
+    return discovered;
+  }
+
+  // Git cannot start in a directory removed during the query; confirm that by path, not message.
+  const after = await capture(() => stat(cwd));
+  if (!after.ok && isMissingPath(after.error)) {
+    return ok(null);
+  }
+
+  return discovered;
 }

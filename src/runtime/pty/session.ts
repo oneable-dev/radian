@@ -214,6 +214,9 @@ export class PtySession {
             this.listeners.delete(send);
             if (this.lease === lease) {
               this.lease = null;
+              if (this.exited) {
+                this.changed();
+              }
             }
           };
         },
@@ -287,7 +290,45 @@ export class PtySession {
     }
   }
 
+  /**
+   * Stops the process without waiting for application confirmation, escalating to SIGKILL
+   * after `graceMs`. Resources are released only after the exit is observed; an unobserved
+   * exit is reported as an error rather than assumed.
+   */
+  async terminate(graceMs = 2000, killWaitMs = 2000): Promise<Result<void, ExpectedError>> {
+    const exited = await capture(async () => {
+      if (this.process.exitCode === null) {
+        this.process.kill("SIGTERM");
+      }
+      if (await settledWithin(this.settled, graceMs)) {
+        return true;
+      }
+      if (this.process.exitCode === null) {
+        this.process.kill("SIGKILL");
+      }
+
+      return settledWithin(this.settled, killWaitMs);
+    });
+    if (!exited.ok) {
+      return exited;
+    }
+    if (!exited.value) {
+      return err(
+        new PtyError(
+          "PTY_CLEANUP_FAILED",
+          `Process ${this.process.pid} did not exit after SIGKILL; it may still be running.`,
+        ),
+      );
+    }
+
+    return this.dispose();
+  }
+
   async dispose(): Promise<Result<void, ExpectedError>> {
+    if (this.disposed) {
+      return ok(undefined);
+    }
+
     const result = await capture(async () => {
       if (this.process.exitCode === null) {
         this.process.kill("SIGTERM");
@@ -297,6 +338,9 @@ export class PtySession {
     });
     if (!result.ok) {
       return result;
+    }
+    if (this.disposed) {
+      return ok(undefined);
     }
 
     this.frame(); // Keep the final snapshot readable while other cleanup is still pending.
@@ -310,5 +354,17 @@ export class PtySession {
     this.listeners.clear();
 
     return ok(undefined);
+  }
+}
+
+async function settledWithin(task: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([task.then(() => true as const), timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }

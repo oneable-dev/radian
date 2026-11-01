@@ -157,6 +157,7 @@ workspace roots resolve against the file that defines them. Unknown sections and
 are errors; an explicitly selected settings file must exist.
 
 Reopen the TUI to apply theme, keybinding and workspace edits; this does not stop running jobs.
+A daemon start or `runtime restart` also re-reads workspace edits from the remembered settings file.
 The daemon reads session retention at startup and every hour, so edits to its selected policy file
 apply at the next sweep. Each repository registration retains its selected policy-file path across
 shared-daemon restarts. A conflicting `--config` is rejected rather than silently changing another
@@ -191,7 +192,80 @@ follows child symlinks. Explicit symlink roots are supported. Overlapping roots 
 are deduplicated using the canonical Git common directory. Each discovered repository includes **all**
 its registered worktrees, even ones outside the scan roots. Missing/inaccessible roots and broken
 Git metadata produce notices without hiding other repositories. Scans are capped at 10,000
-directories and run on TUI launch; reopen the TUI to discover newly added repositories.
+directories. The shared daemon scans on its own start/restart and whenever a TUI opens;
+reopen the TUI to discover newly added repositories.
+
+**Membership owner.** Current workspace membership is decided only by the selected configuration
+and the actual filesystem/Git state, and the shared daemon is its only owner. A TUI sends a
+_workspace source_ (`POST /workspace` on the shared socket) and then mirrors the catalog the daemon
+prepared; it never scans roots or registers a competing list. The source is a minimal reference:
+
+| Field              | Meaning                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `settings`         | Absolute unified settings path and whether it was selected explicitly (`--config`).         |
+| `workspace`        | Absolute legacy/override workspace file and whether it was explicit (`--workspace-config`). |
+| `cwd` / `contexts` | Launch directories used by `roots: []`; same-reference launches add contexts.               |
+
+Resolved roots and discovered repositories are never persisted. Each start or refresh re-reads the
+referenced files with the usual precedence (explicit workspace file, unified `workspace` section,
+legacy `workspace.json`, defaults). An explicitly selected file must exist; an implicit default may be
+absent. Offline (`--test-runtime`) daemons never read implicit workspace files, so tests cannot scan a
+user's real roots; an explicit isolated `--config` fixture is honored. The daemon reads only the
+workspace section and never initializes theme, keymap or native UI code.
+
+A refresh that would run a repository under a different session-policy file than its live host is
+rejected before the source, catalog or registry changes. A refresh from another configuration is
+otherwise accepted and replaces the remembered source; heterogeneous configurations are not merged.
+Launch contexts of a missing or moved repository remain remembered, so it returns when it reappears;
+only a confirmed deletion (below) removes them.
+
+**Unavailable repositories.** A repository that is confirmed missing on disk or excluded by the latest
+configuration is no longer a member: it accepts no new Agent sessions, resumes, new tabs, editors,
+terminals or activation (`RESOURCE_UNAVAILABLE`). Existing sessions, editors and terminals are never
+forcibly closed; prompts, interrupts, closing and attachments of existing resources continue. Its rows
+stay listed (`unavailableRepositories` in the shared snapshot) until the last owned resource is
+released, then its host stops internally without affecting other repositories. Saved conversations,
+drafts, selections and History files are retained. Permission, corruption and transient discovery
+failures are shown as notices and keep previous entries; they are never treated as deletion.
+History of a repository that is currently unavailable cannot be browsed until it is available again.
+
+**Confirmed deletion.** Missing paths, renames, moves, Git listing changes, configuration exclusion
+and permission or mount failures are only unavailability. Cleanup starts only from positive kernel
+evidence that the held directory of a watched checkout was unlinked (macOS `kqueue` `NOTE_DELETE`;
+unsupported platforms never delete). One shared tracker in the daemon holds these descriptors for
+cold and active repositories, so evidence survives activation and host release. Absence observed
+after a daemon restart has no such evidence and stays non-destructive. The cleanup then runs:
+
+1. A synchronous fence rejects new sessions, resumes, editors, terminals, activation, registration
+   and preference writes for the scope, including hosts still opening.
+2. A durable receipt (`workspace-cleanup.json` and the repository's `cleanup.json`) is recorded
+   before the evidence is acknowledged.
+3. Matching Agents and their children, editors and terminals are terminated without restoration
+   intent (unlike a normal stop); checkpoint and retention writers drain. A cold repository is
+   cleaned without starting SDK, editor or terminal resources, after reserving its runtime ownership.
+4. Owned files are purged: session records and snapshots, managed SDK originals, Radian plan
+   sidecars, drafts and views, registry restoration entries and launch contexts, and every TUI's
+   saved state. SDK originals outside Radian's directories are preserved.
+5. The scope is reopened, memory of the old generation is dropped, and only then are resource fences
+   released.
+
+A linked worktree deletion leaves its siblings untouched; deleting the common Git directory and
+checkouts cleans the whole repository, including historical worktrees. Any failed phase keeps the
+fence and an explicit notice; a workspace refresh or the next daemon start retries the same receipt.
+A directory recreated at the same path is a fresh generation without the old sessions. If the only
+roots=[] launch context was deleted it is marked removed, and discovery never substitutes another
+cwd. The shared snapshot publishes `deletedScopes` (`pending`, `complete`, `reopened`); TUIs treat
+only these summaries as deletion and stop saving the deleted drafts and selections.
+
+An attached TUI applies each summary newer than its acknowledged revision, including a `reopened`
+one it sees after reconnecting. It first discards the deleted scope's drafts, input history,
+viewports, folds, Git and terminal selections and any attachment preview of it, then moves the
+selection, acknowledges the revision and saves its state once. A selected deleted worktree is
+replaced by the next surviving worktree in the previous order, then the previous one, then the
+first new row; other selections are unchanged. If no workspace remains while a Code view is open,
+the existing CHAT view returns with its selected conversation and draft, or its existing empty
+state; nothing is created or sent. An open CHAT view keeps its conversation, draft, caret, focus
+and open pickers. Deleted session IDs are never restored, even when the worktree path is recreated.
 
 Worktrees within discovered repositories update automatically. Native filesystem watches observe
 Git's canonical common directory and linked-worktree registration metadata, including the first
@@ -204,7 +278,7 @@ resources remain listed until those resources are released. Failed scans retain 
 list and expose a notice. Services that were started before this feature was installed need a
 one-time restart to load it; reopening only the TUI does not replace an existing service.
 
-The TUI registers discovered repositories with **one shared Bun daemon per user/state-root/mode**.
+The TUI attaches to the repositories discovered by **one shared Bun daemon per user/state-root/mode**.
 Repository execution resources initialize only when selected or explicitly used; registration does
 not create an Agent, editor or shell. The launching repository is preferred initially when present,
 otherwise the first discovered repo. Repository-scoped channels retain their own instance fencing,
@@ -1940,7 +2014,7 @@ validation. Use `bun run start` for real provider execution after configuring Pi
 
 ### Service lifetime and recovery
 
-The shared daemon starts automatically on first workspace registration. Its process identity includes
+The shared daemon starts automatically when a TUI first opens a workspace. Its process identity includes
 only the state root and live/test mode, not a repository or worktree. Unix sockets are user-private
 (directory `0700`, socket `0600`); manifests/logs use private files. No TCP port is exposed.
 Repository-scoped Unix endpoints remain available for protocol compatibility, but every new endpoint
@@ -1948,17 +2022,44 @@ is served by the **same Bun process**.
 
 `runtime/lifecycle.ts` owns daemon discovery, startup, readiness and repository registration.
 `runtime/client.ts` only communicates with existing endpoints and never spawns a process.
-The application bootstrap explicitly supplies the lifecycle connector to `WorkspaceClient`;
-metadata registration still does not activate repository SDKs, editors or terminals.
+The application bootstrap uses `WorkspaceClient.attach`, which asks the daemon to prepare the
+workspace (`prepareWorkspace`) and then attaches to its repository endpoints; attaching does not
+activate repository SDKs, editors or terminals. TUI preparation atomically reserves its CHAT policy
+with catalog adoption (`attachChat`), including an absent-daemon launch; a conflicting attachment
+cannot replace another TUI's catalog. If the launch is rejected, the last accepted workspace is prepared.
+Standalone workspace refreshes do not reconfigure CHAT. `WorkspaceClient.open` with an explicit repository
+list remains for isolated low-level clients and tests.
 `runtime/launch.ts` constructs child commands from an explicit source entrypoint or the compiled
 executable itself, never from the caller's `process.argv[1]` or working directory. Source and
 standalone execution share the same daemon protocol, state paths and ownership checks.
 
 Repository data stays at its existing `~/.radian/workspaces/<identity>/` location, keyed by canonical
 Git repository, state root and live/test mode. `workspace.json`, `sessions/` and `sdk-sessions/` do not
-move or merge. Shared process registrations and logs live separately under `~/.radian/daemon/live/`
-or `offline/` (`repositories.json` and `runtime.log`). Registrations remember lazy/active intent so a
-restart can restore the same repositories without replaying prompts, shells or editor commands.
+move or merge. Shared restoration state and logs live separately under `~/.radian/daemon/live/`
+or `offline/` (`repositories.json` and `runtime.log`). `repositories.json` (version 2) holds the
+workspace source, the CHAT settings path and per-repository metadata (lazy/active intent and policy
+file). Existing per-repository policy bindings survive restoration; `implicitConfig` freezes an
+implicit policy file's original location without making an absent default an explicit-file error.
+This metadata applies only to repositories that discovery finds; it never adds a candidate.
+On start or `runtime restart`, the daemon re-reads the remembered source, discovers current members
+and immediately reactivates those that were active, before any TUI connects. Cold repositories stay
+SDK-free, and prompts, shells and editor commands are never replayed. `--runtime-service` adopts a
+source from `--config`, `--workspace-config` or `--runtime-cwd` when given; otherwise it uses the
+remembered one. A first live start without a remembered source uses the current default settings
+and launch directory; legacy registrations never supply either. Isolated offline low-level clients
+without a source keep an empty catalog until explicitly configured. A `daemon-starting` snapshot
+marks discovery/restoration in progress; lifecycle connectors wait for its removal before returning.
+
+A version 1 registry is read without modification and migrated in memory: its entries keep their
+active/config/cwd metadata, but their paths are never restored or enumerated as candidates and no
+configuration source is inferred from them. The first successful save copies the original to
+`repositories.v1.json` using atomic, exclusive publication before replacing the registry. An existing
+backup must exactly match the original; a partial or different backup blocks migration and preserves
+both files rather than overwriting either one. Migration also rechecks the loaded v1 bytes before
+replacement: a newer manifest is a conflict, not permission to restore an older backup over it.
+A corrupt registry stops startup with `STORAGE_FAILED` and is not overwritten.
+Low-level `POST /repositories` registration remains for isolated clients without a workspace source;
+once a source exists it only accepts current members.
 Use `--state-dir PATH` or `RADIAN_STATE_DIR` to isolate another daemon and its data.
 
 ```sh
