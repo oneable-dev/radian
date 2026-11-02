@@ -16,7 +16,8 @@ test("Closing a session through the real service never emits shutdown progress n
   let child: Bun.Subprocess | undefined;
   let raw = "";
   let messagesFrame = "";
-  let selectedCode = false;
+  let selectedAgent = false;
+  let timedOut = false;
   const screen = new Terminal({ cols: 120, rows: 24, scrollback: 0, allowProposedApi: true });
   const frame = () =>
     Array.from(
@@ -43,6 +44,7 @@ test("Closing a session through the real service never emits shutdown progress n
     const decoder = new TextDecoder();
     const observed = Promise.all([ready.promise, closed.promise, messagesShown.promise]);
     const deadline = setTimeout(() => {
+      timedOut = true;
       const error = new Error(
         `Timed out waiting for CLI session closure. Terminal tail:\n${Bun.stripANSI(raw).slice(-2000)}`,
       );
@@ -69,14 +71,14 @@ test("Closing a session through the real service never emits shutdown progress n
             screen.write(bytes, () => {
               const text = frame();
               // First launch opens CHAT; this regression explicitly exercises AGENT.
-              if (!selectedCode && text.includes("CHAT")) {
-                selectedCode = true;
+              if (!selectedAgent && text.includes("CHAT")) {
+                selectedAgent = true;
                 _terminal.write("\x00a");
               }
               if (
                 text.includes("AGENT") &&
                 text.includes("Ask to do anything") &&
-                text.includes("context")
+                text.includes("100% left")
               ) {
                 ready.resolve();
               }
@@ -103,8 +105,9 @@ test("Closing a session through the real service never emits shutdown progress n
       expect(Bun.stripANSI(raw)).not.toContain("OFFLINE SDK");
       child.terminal?.write("\x00!");
       await observed;
-      child.terminal?.write("\x1b\x00d");
+      child.terminal?.write("\x00d");
       expect(await child.exited).toBe(0);
+      expect(timedOut).toBe(false);
 
       // Shutdown progress and offline startup Info appear in neither toasts nor retained Messages.
       const output = Bun.stripANSI(raw);

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { Terminal } from "@xterm/headless";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
@@ -8,17 +9,19 @@ import { connectChatRuntime, connectRuntime } from "../runtime/lifecycle.ts";
 import { pidAlive } from "../runtime/storage.ts";
 
 // The PTY captures notification bytes rather than displaying OS notifications.
-for (const mode of ["code", "chat"] as const) {
+for (const mode of ["agent", "chat"] as const) {
   test(`Real ${mode} service completion reaches connected CLI UI and terminal notifications before clean detach`, async () => {
     // Connect real Git, SDK, IPC, and TUI; replace only model responses with offline fixtures.
     const fixture = await createWorktreeFixture();
     const entry = join(import.meta.dir, "..", "index.ts");
     const stateRoot = join(fixture.directory, "state");
+    const configRoot = join(fixture.directory, "config");
     let client: RuntimeClient | undefined;
     let child: Bun.Subprocess | undefined;
     let raw = "";
     let navigated = false;
     let selectedChat = false;
+    let timedOut = false;
     const terminalScreen = new Terminal({
       cols: 120,
       rows: 24,
@@ -31,6 +34,16 @@ for (const mode of ["code", "chat"] as const) {
         (_, row) => terminalScreen.buffer.active.getLine(row)?.translateToString(true) ?? "",
       ).join("\n");
     try {
+      if (mode === "chat") {
+        // Without a selected conversation or composer, browsing requires an explicit History mapping.
+        const configDirectory = join(configRoot, "radian");
+        await mkdir(configDirectory, { recursive: true });
+        await writeFile(
+          join(configDirectory, "keybindings.json"),
+          JSON.stringify({ bindings: { "history.show": ["<leader> h"] } }),
+        );
+      }
+
       client =
         expectOk(
           await (mode === "chat"
@@ -49,6 +62,7 @@ for (const mode of ["code", "chat"] as const) {
       const notified = Promise.withResolvers<void>();
       const decoder = new TextDecoder();
       const deadline = setTimeout(() => {
+        timedOut = true;
         const error = new Error(
           `Timed out waiting for CLI terminal notification. Terminal tail:\n${Bun.stripANSI(raw).slice(-2000)}`,
         );
@@ -65,7 +79,7 @@ for (const mode of ["code", "chat"] as const) {
             ...process.env,
             TERM: "xterm-ghostty",
             TERM_PROGRAM: "ghostty",
-            XDG_CONFIG_HOME: join(fixture.directory, "config"),
+            XDG_CONFIG_HOME: configRoot,
           },
           terminal: {
             cols: 120,
@@ -79,18 +93,22 @@ for (const mode of ["code", "chat"] as const) {
                 const screen = frame();
                 if (!navigated && screen.includes("CHAT")) {
                   navigated = true;
-                  _terminal.write(mode === "code" ? "\x00a" : "\x00h");
+                  _terminal.write(mode === "agent" ? "\x00a" : "\x00h");
                 }
                 if (
                   mode === "chat" &&
                   !selectedChat &&
-                  screen.includes("History") &&
+                  screen.includes("Conversations") &&
                   screen.includes("1/1")
                 ) {
                   selectedChat = true;
                   _terminal.write("\r");
                 }
-                if (screen.includes(mode.toUpperCase()) && screen.includes("context")) {
+                if (
+                  screen.includes(mode.toUpperCase()) &&
+                  screen.includes("Ask to do anything") &&
+                  screen.includes("100% left")
+                ) {
                   ready.resolve();
                 }
                 if (
@@ -114,6 +132,7 @@ for (const mode of ["code", "chat"] as const) {
         const code = await child.exited;
 
         // The real service drives both the in-app card and native delivery without changing detach ownership.
+        expect(timedOut).toBe(false);
         expect(raw).toContain("Completed");
         // oxlint-disable-next-line eslint/no-control-regex -- Assert the exact OSC notification protocol on the captured PTY.
         expect(raw.match(/\x1b\]777;notify;Radian · Task completed;/gu)).toHaveLength(1);
