@@ -253,7 +253,18 @@ export class UiTheme {
   };
 
   private updatePalette = (palette: TerminalColors): void => {
-    this.palette = palette;
+    const previous = this.palette;
+    // Startup theme-mode detection can trigger a second, incomplete palette query.
+    // Missing responses are unknown colors, not a reset of previously detected snapshots.
+    this.palette = {
+      ...palette,
+      defaultForeground: palette.defaultForeground ?? previous?.defaultForeground ?? null,
+      defaultBackground: palette.defaultBackground ?? previous?.defaultBackground ?? null,
+      palette: Array.from(
+        { length: Math.max(palette.palette.length, previous?.palette.length ?? 0) },
+        (_, index) => palette.palette[index] ?? previous?.palette[index] ?? null,
+      ),
+    };
     this.refresh();
   };
 

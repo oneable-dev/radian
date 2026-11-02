@@ -196,6 +196,71 @@ test("Unqueryable terminals retain default and ANSI color intent", async () => {
   }
 });
 
+test("Missing startup refresh responses preserve detected colors and the active draft", async () => {
+  // The initial palette can succeed before OpenTUI finishes its automatic theme-mode refresh.
+  const app = await mount();
+  try {
+    const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+    prompt.focus();
+    await app.mockInput.typeText(" draft");
+    await app.renderOnce();
+    const before = app.captureCharFrame();
+    const theme = uiTheme(app.renderer);
+    const surface = rgb(theme.colors.surface);
+    const logo = rgb(theme.styles["branding.logo"].fg);
+
+    // A timed-out follow-up query reports unknown colors, not a new terminal theme.
+    app.renderer.emit("palette", {
+      ...palette(),
+      palette: Array(16).fill(null),
+      defaultForeground: null,
+      defaultBackground: null,
+    });
+    await app.renderOnce();
+
+    // Derived surfaces must not fall back to gray while terminal-default colors stay unchanged.
+    expect(rgb(theme.colors.surface)).toEqual(surface);
+    expect(rgb(theme.styles["branding.logo"].fg)).toEqual(logo);
+    expect(rgb(app.span("Theme-sensitive transcript").fg)).toEqual([236, 236, 236]);
+    expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([20, 20, 20]);
+    expect(rgb(app.span("unsent request draft").bg)).toEqual(surface);
+    expect(rgb(app.identitySpan().bg)).toEqual([17, 119, 153]);
+    expect(app.captureCharFrame()).toBe(before);
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.view.promptDrafts.a1).toBe("unsent request draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Partial palette refreshes update reported colors and retain the remaining snapshots", async () => {
+  const app = await createTestRenderer({ width: 20, height: 3 });
+  try {
+    // Renderers may follow a full palette query with a smaller or incomplete response.
+    const theme = uiTheme(app.renderer);
+    theme.configure(palette());
+
+    app.renderer.emit("palette", {
+      ...palette(),
+      palette: [null, "#FF1122"],
+      defaultForeground: null,
+      defaultBackground: "#102030",
+    });
+
+    // New colors take effect independently; omitted ANSI slots retain their previous values.
+    expect(rgb(theme.colors.panel)).toEqual([16, 32, 48]);
+    expect(rgb(theme.colors.error)).toEqual([255, 17, 34]);
+    expect(rgb(theme.colors.text)).toEqual([236, 236, 236]);
+    expect(rgb(theme.colors.success)).toEqual([34, 136, 34]);
+    expect(rgb(theme.colors.accent)).toEqual([17, 119, 153]);
+    expect(rgb(theme.colors.surface)).toEqual([27, 42, 57]);
+    expect(theme.colors.panel.intent).toBe("default");
+    expect(theme.colors.accent.intent).toBe("indexed");
+  } finally {
+    await app.dispose();
+  }
+});
+
 test("Only explicit overrides stay fixed while other colors follow later terminal themes", async () => {
   const app = await mount();
   try {
