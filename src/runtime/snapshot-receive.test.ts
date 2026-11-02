@@ -1,5 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fetchSnapshot, RuntimeClient } from "./client.ts";
+import { probeSnapshot } from "./snapshot-probe.ts";
 import {
   emptyPreferences,
   maxFrameBytes,
@@ -191,6 +195,85 @@ test("Responses without Content-Length enforce actual byte limits and clean acti
 
   expect(expectError(await readJson(response, { maximumBytes: 16 })).code).toBe("PROTOCOL_ERROR");
   expect(cancelled).toBe(true);
+});
+
+test("Default single-attempt snapshot timeout includes the body over a real Unix connection", async () => {
+  // Headers and an initial chunk arrive immediately, but the body never completes in budget.
+  const directory = await mkdtemp(join(tmpdir(), "radian-snapshot-body-"));
+  const socket = join(directory, "runtime.sock");
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  let requests = 0;
+  const server = Bun.serve({
+    unix: socket,
+    fetch: () => {
+      requests++;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"version":'));
+            const timer = setTimeout(() => {
+              timers.delete(timer);
+              controller.close();
+            }, 1000);
+            timers.add(timer);
+          },
+        }),
+      );
+    },
+  });
+  try {
+    // Ordinary callers retain one 500 ms request, including body consumption.
+    const started = Date.now();
+    const failure = expectError(await fetchSnapshot({ ...paths, socket }));
+
+    expect(failure.code).toBe("CONNECTION_TIMEOUT");
+    expect(requests).toBe(1);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+    expect(Date.now() - started).toBeLessThan(900);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+    await server.stop(true);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Failed snapshot bodies release their reader before the next observation attempt", async () => {
+  // This stream mirrors fetch by forwarding its request's timeout reason into the body.
+  let first: Response | undefined;
+  let attempts = 0;
+  const fetchMock = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async (_input: string | URL | Request, options?: RequestInit) => {
+        attempts++;
+        if (attempts === 1) {
+          first = new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                options!.signal!.addEventListener(
+                  "abort",
+                  () => controller.error(options!.signal!.reason),
+                  { once: true },
+                );
+              },
+            }),
+          );
+          return first;
+        }
+        expect(first!.body!.locked).toBe(false);
+        return Response.json(state());
+      },
+      { preconnect: fetch.preconnect },
+    ),
+  );
+  try {
+    const snapshot = expectOk(await probeSnapshot(paths, Date.now() + 5000));
+
+    expect(snapshot!.instance).toBe("fixture");
+    expect(attempts).toBe(2);
+    expect(first!.body!.locked).toBe(false);
+  } finally {
+    fetchMock.mockRestore();
+  }
 });
 
 test("Larger snapshot limits never permit oversized commands or model execution", async () => {

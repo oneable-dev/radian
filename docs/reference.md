@@ -2161,6 +2161,21 @@ restart retain open-session intent and saved history, unlike closing an individu
 interrupt Agent work and close **all** owned terminals and editors; save unsaved buffers first.
 Live/test daemons and different state roots remain independent.
 
+Restart inspection and startup/shutdown confirmation retry only snapshot GET observations: at most
+four attempts per failed observation, including the initial request, with response timeouts of
+500 ms, 1 s, 2 s and 2 s. Each timeout covers both headers and the complete response body. Retries
+wait with full jitter bounded by 100 ms, 200 ms and 400 ms, respectively. Startup and shutdown each
+retain their own 15-second deadline; remaining time caps both waits and requests. Valid starting or
+stopping snapshots remain successful observations and allow normal phase polling within that deadline.
+Only timeouts and connection resets/broken pipes are retried; permission, protocol and identity errors
+remain terminal. Runtime absence is still a successful empty observation, not a timeout. Status keeps
+its single 500 ms snapshot request.
+
+Exhausted observation retries exit nonzero with completion **not confirmed**. This does not mean an
+accepted stop/start was rolled back or the daemon is absent; inspect its status before deciding what
+to do next. Lifecycle mutations and Agent actions are never replayed by these retries, and a replacement
+daemon is never stopped again.
+
 **Legacy migration:** old repository processes can still own live sessions and the same on-disk data.
 They are never automatically killed, adopted, or allowed a second writer. Ordinary shared stop/restart
 does not target them. Finish their jobs and save editor buffers, then explicitly stop each legacy

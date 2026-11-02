@@ -22,6 +22,7 @@ import {
 } from "./storage.ts";
 import { readJson, remoteError, transport } from "./transport.ts";
 import { fetchSnapshot, RuntimeClient } from "./client.ts";
+import { probeSnapshot } from "./snapshot-probe.ts";
 import { childCommand, selfLaunch, type SelfLaunch } from "./launch.ts";
 
 export type ConnectOptions = {
@@ -215,7 +216,7 @@ export async function ensureSharedDaemon(
   let child: ChildProcess | undefined;
   let attempts = 0;
   while (Date.now() < deadline) {
-    const fetched = await fetchSnapshot(paths);
+    const fetched = await probeSnapshot(paths, deadline);
     if (!fetched.ok) return fetched;
     if (fetched.value) {
       const identity = sharedIdentity(fetched.value, options.offline ?? false);
@@ -252,12 +253,14 @@ export async function ensureSharedDaemon(
         child = launched.value;
       }
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(40, Math.max(0, deadline - Date.now()))),
+    );
   }
   return err(
     new ConnectionError(
       "CONNECTION_TIMEOUT",
-      `Shared daemon startup/shutdown has not completed. Inspect ${paths.log}; no existing owner was stopped.`,
+      `Shared daemon startup/shutdown has not completed; its outcome is not confirmed. Inspect ${paths.log}; no existing owner was stopped.`,
     ),
   );
 }

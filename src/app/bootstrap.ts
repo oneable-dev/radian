@@ -16,6 +16,7 @@ import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { Repository } from "../workspace/model.ts";
 import { defaultPreferences, fetchSnapshot, RuntimeClient } from "../runtime/client.ts";
 import { connectRuntime, ensureSharedDaemon } from "../runtime/lifecycle.ts";
+import { probeSnapshot } from "../runtime/snapshot-probe.ts";
 import { selfLaunch, type SelfLaunch } from "../runtime/launch.ts";
 import { daemonPaths } from "../runtime/storage.ts";
 import type { RuntimePreferences, WorkViewPreferences } from "../runtime/protocol.ts";
@@ -131,7 +132,9 @@ async function runAdministrative(
     }
   } else {
     const paths = daemonPaths(options.offline, options.stateRoot);
-    const snapshot = await fetchSnapshot(paths);
+    const snapshot = options.restart
+      ? await probeSnapshot(paths, Date.now() + 15000)
+      : await fetchSnapshot(paths);
     if (!snapshot.ok) {
       return snapshot;
     }
@@ -171,7 +174,7 @@ async function runAdministrative(
 
       const deadline = Date.now() + 15000;
       while (true) {
-        const snapshot = await fetchSnapshot(client.paths);
+        const snapshot = await probeSnapshot(client.paths, deadline);
         if (!snapshot.ok) {
           return snapshot;
         }
@@ -186,7 +189,7 @@ async function runAdministrative(
             ),
           );
         }
-        if (Date.now() > deadline) {
+        if (Date.now() >= deadline) {
           return err(
             new ConnectionError(
               "CONNECTION_TIMEOUT",
@@ -195,7 +198,9 @@ async function runAdministrative(
           );
         }
 
-        await new Promise<void>((resolve) => setTimeout(resolve, 40));
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, Math.min(40, Math.max(0, deadline - Date.now()))),
+        );
       }
     }
     if (options.restart) {

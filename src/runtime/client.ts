@@ -2131,21 +2131,33 @@ export class RuntimeClient {
 
 export async function fetchSnapshot(
   paths: RuntimePaths,
+  timeoutMs = 500,
 ): Promise<Result<RuntimeSnapshot | null, ExpectedError>> {
-  const response = await transport(paths, "/snapshot", { signal: AbortSignal.timeout(500) });
-  if (!response.ok) {
-    return response.error.code === "RUNTIME_ABSENT" ? ok(null) : response;
-  }
-  if (!response.value.ok) {
-    return err(new ProtocolError(`Runtime snapshot failed: ${response.value.status}`));
-  }
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("Runtime request timed out.", "TimeoutError")),
+    timeoutMs,
+  );
+  try {
+    const response = await transport(paths, "/snapshot", { signal: controller.signal });
+    if (!response.ok) {
+      return response.error.code === "RUNTIME_ABSENT" ? ok(null) : response;
+    }
+    if (!response.value.ok) {
+      // Abort also releases unread error bodies without waiting for a remote peer.
+      controller.abort();
+      return err(new ProtocolError(`Runtime snapshot failed: ${response.value.status}`));
+    }
 
-  const body = await readJson(response.value, {
-    maximumBytes: maxSnapshotBytes,
-    label: "Runtime snapshot",
-  });
+    const body = await readJson(response.value, {
+      maximumBytes: maxSnapshotBytes,
+      label: "Runtime snapshot",
+    });
 
-  return body.ok ? parseSnapshot(body.value) : body;
+    return body.ok ? parseSnapshot(body.value) : body;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function defaultPreferences(): RuntimePreferences {
