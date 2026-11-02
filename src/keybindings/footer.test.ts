@@ -127,6 +127,7 @@ test.each([
   ["git.preview", "git-search"],
   ["git.change-session", "git-prompt"],
   ["accounts.rename", "accounts"],
+  ["accounts.reauthenticate", "accounts"],
   ["accounts.browser", "accounts"],
   ["accounts.copy-url", "accounts"],
   ["accounts.copy-code", "accounts"],

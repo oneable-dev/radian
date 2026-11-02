@@ -1257,6 +1257,409 @@ test("Closing before login starts cancels late operations without reopening the 
   }
 });
 
+const connectedOAuth: AccountsCatalog = {
+  ...catalog,
+  selections: { fixture: "named" },
+  accounts: [{ ...catalog.accounts[0]!, type: "oauth", usedBy: ["fixture-worktree"] }],
+};
+
+test.each(["search", "results"] as const)(
+  "Checking an active OAuth account preserves %s focus, query, and candidate",
+  async (focus) => {
+    // A healthy check is not a selection mutation or another account login.
+    const calls: AccountRequest[] = [];
+    const checking = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+    const app = await mount({
+      onAccountsRequest: async (request) => {
+        calls.push(request);
+        if (request.type === "check") return checking.promise;
+        return ok({
+          kind: "catalog",
+          catalog: { ...connectedOAuth, worktreeId: request.worktreeId },
+        });
+      },
+    });
+    try {
+      await app.open();
+      app.mockInput.pressKey("/");
+      await app.render();
+      await app.mockInput.typeText("Personal");
+      const search = app.get("accounts-search") as InputRenderable;
+      search.cursorOffset = 3;
+      if (focus === "results") app.mockInput.pressTab();
+      await app.render();
+      const focused = app.renderer.currentFocusedRenderable;
+
+      // Repeated activation while the check is pending does not submit duplicate operations.
+      app.mockInput.pressEnter();
+      await app.render();
+      app.mockInput.pressEnter();
+      checking.resolve(
+        ok({
+          kind: "catalog",
+          catalog: { ...connectedOAuth, revision: 2, worktreeId: app.selection.worktree!.id },
+        }),
+      );
+      await app.render();
+
+      expect(calls.filter((request) => request.type === "check")).toEqual([
+        {
+          type: "check",
+          provider: "fixture",
+          accountId: "named",
+          revision: 1,
+          worktreeId: app.selection.worktree!.id,
+        },
+      ]);
+      expect(calls.some((request) => request.type === "select" || request.type === "login")).toBe(
+        false,
+      );
+      expect(search.value).toBe("Personal");
+      expect(search.cursorOffset).toBe(3);
+      expect(app.renderer.currentFocusedRenderable).toBe(focused);
+      expect(app.captureCharFrame()).toContain("Personal [Active]");
+      expect(app.sent).toEqual([]);
+    } finally {
+      checking.resolve(err(new CancelledError()));
+      await app.close();
+    }
+  },
+);
+
+test.each([
+  "Permission denied",
+  "Rate limited; retry later",
+  "Authentication could not be verified",
+])(
+  "An indeterminate check stays in accounts without opening authentication: %s",
+  async (warning) => {
+    // Permission, cooldown, and opaque SDK failures must not force another browser login.
+    const calls: AccountRequest[] = [];
+    const opened: string[] = [];
+    const app = await mount({
+      onOpenLoginUrl: async (url) => {
+        opened.push(url);
+        return ok(undefined);
+      },
+      onAccountsRequest: async (request) => {
+        calls.push(request);
+        return ok({
+          kind: "catalog",
+          catalog: { ...connectedOAuth, worktreeId: request.worktreeId },
+          ...(request.type === "check" ? { warning } : {}),
+        });
+      },
+    });
+    try {
+      await app.open();
+      app.mockInput.pressKey("n", { ctrl: true });
+      app.mockInput.pressEnter();
+      await app.render();
+
+      expect(calls.map((request) => request.type)).toEqual(["list", "check"]);
+      expect(app.captureCharFrame()).toContain(warning);
+      expect(app.captureCharFrame()).toContain("Personal [Active]");
+      expect(opened).toEqual([]);
+      expect(app.get("accounts-input").visible).toBe(false);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test.each(["inactive OAuth", "active API key"])(
+  "%s activation still selects instead of checking or reauthenticating",
+  async (kind) => {
+    // Only already-active named OAuth entries gain the conditional check behavior.
+    const calls: AccountRequest[] = [];
+    const accounts = kind === "inactive OAuth" ? connectedOAuth.accounts : catalog.accounts;
+    const app = await mount({
+      onAccountsRequest: async (request) => {
+        calls.push(request);
+        return ok({
+          kind: "catalog",
+          catalog: {
+            ...catalog,
+            accounts,
+            selections: kind === "active API key" ? { fixture: "named" } : {},
+            worktreeId: request.worktreeId,
+          },
+        });
+      },
+    });
+    try {
+      await app.open();
+      app.mockInput.pressKey("j");
+      app.mockInput.pressEnter();
+      await app.render();
+
+      expect(calls.map((request) => request.type)).toEqual(["list", "select"]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Confirmed recovery reuses authentication choices and reports replacement rather than addition", async () => {
+  // The backend asks for identity confirmation before replacing credentials with unverifiable identity.
+  const calls: AccountRequest[] = [];
+  const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+  const flow: LoginView = {
+    id: "recovery",
+    intent: "reauthenticate",
+    revision: 1,
+    status: "pending",
+    events: [],
+    prompt: {
+      id: "confirm",
+      type: "select",
+      message: "Same-account identity cannot be verified.",
+      options: [
+        { id: "cancel", label: "Keep previous credentials" },
+        { id: "replace", label: "Replace credentials" },
+      ],
+    },
+  };
+  const app = await mount({
+    onAccountsRequest: async (request, signal) => {
+      calls.push(request);
+      if (request.type === "check") return ok({ kind: "login", login: flow });
+      if (request.type === "poll") {
+        signal?.addEventListener("abort", () => waiting.resolve(err(new CancelledError())), {
+          once: true,
+        });
+        return waiting.promise;
+      }
+      if (request.type === "answer") {
+        const completed = structuredClone(flow);
+        delete completed.prompt;
+        return ok({
+          kind: "login",
+          login: {
+            ...completed,
+            revision: 2,
+            status: "complete",
+            account: connectedOAuth.accounts[0]!,
+            warning: "Saving failed; keep this daemon running.",
+          },
+        });
+      }
+      return ok({
+        kind: "catalog",
+        catalog: { ...connectedOAuth, worktreeId: request.worktreeId },
+      });
+    },
+  });
+  try {
+    await app.open();
+    app.mockInput.pressKey("j");
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(app.captureCharFrame()).toContain("Reauthenticate");
+    expect(app.captureCharFrame()).toContain("Same-account identity cannot be verified.");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-search");
+
+    // Explicit acceptance uses the same keyboard-driven prompt; no Add account or label step is involved.
+    app.mockInput.pressKey("n", { ctrl: true });
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(calls.find((request) => request.type === "answer")).toMatchObject({ value: "replace" });
+    expect(calls.some((request) => request.type === "login" || request.type === "select")).toBe(
+      false,
+    );
+    expect(app.captureCharFrame()).toContain("Account reauthenticated: Personal");
+    expect(app.captureCharFrame()).toContain("Saving failed; keep this daemon running.");
+    expect(app.captureCharFrame()).not.toContain("Account added:");
+    expect(app.captureCharFrame()).toContain("Personal [Active]");
+    expect(app.sent).toEqual([]);
+
+    waiting.resolve(ok({ kind: "login", login: flow }));
+    await app.render();
+    expect(app.captureCharFrame()).not.toContain("Replace credentials");
+  } finally {
+    waiting.resolve(err(new CancelledError()));
+    await app.close();
+  }
+});
+
+test.each([false, true])(
+  "Manual reauthentication follows configured keys and keeps search literal: override=%s",
+  async (override) => {
+    // Explicit recovery remains available when an automatic check cannot classify an SDK error.
+    const keymap = expectOk(
+      parseKeymap(
+        override
+          ? {
+              bindings: { "accounts.reauthenticate": [{ keys: "e", scope: "accounts" }] },
+            }
+          : {},
+      ),
+    );
+    const calls: AccountRequest[] = [];
+    const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+    const flow: LoginView = {
+      id: "manual-recovery",
+      intent: "reauthenticate",
+      revision: 1,
+      status: "pending",
+      events: [],
+      prompt: { id: "code", type: "manual_code", message: "Paste authorization code" },
+    };
+    const app = await mount({
+      keymap,
+      onAccountsRequest: async (request, signal) => {
+        calls.push(request);
+        if (request.type === "reauthenticate") return ok({ kind: "login", login: flow });
+        if (request.type === "poll") {
+          signal?.addEventListener("abort", () => waiting.resolve(err(new CancelledError())), {
+            once: true,
+          });
+          return waiting.promise;
+        }
+        return ok({
+          kind: "catalog",
+          catalog: { ...connectedOAuth, worktreeId: request.worktreeId },
+        });
+      },
+    });
+    try {
+      await app.open();
+      app.mockInput.pressKey("/");
+      await app.render();
+      await app.mockInput.typeText("R");
+      expect((app.get("accounts-search") as InputRenderable).value).toBe("R");
+      expect(calls.map((request) => request.type)).toEqual(["list"]);
+      app.mockInput.pressKey("c", { ctrl: true });
+      await app.mockInput.typeText("Personal");
+      app.mockInput.pressTab();
+      await app.render();
+
+      if (override) {
+        app.mockInput.pressKey("r", { shift: true });
+        await app.render();
+        expect(calls.map((request) => request.type)).toEqual(["list"]);
+      }
+      app.mockInput.pressKey(override ? "e" : "r", override ? {} : { shift: true });
+      await app.render();
+      expect(calls.find((request) => request.type === "reauthenticate")).toMatchObject({
+        accountId: "named",
+        provider: "fixture",
+      });
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-secret");
+      expect(keymapHelp(keymap, "accounts", () => true)).toContain(
+        "Reauthenticate the selected saved OAuth account",
+      );
+      await app.mockInput.typeText("private-authorization-code");
+      await app.render();
+      expect(app.captureCharFrame()).not.toContain("private-authorization-code");
+      expect(JSON.stringify(app.view.promptDrafts)).not.toContain("private-authorization-code");
+      app.mockInput.pressEscape();
+      await app.render();
+      expect(calls.some((request) => request.type === "cancel" && request.flowId === flow.id)).toBe(
+        true,
+      );
+    } finally {
+      waiting.resolve(err(new CancelledError()));
+      await app.close();
+    }
+  },
+);
+
+test.each(["external OAuth", "saved API key"])(
+  "Manual recovery never replaces %s credentials",
+  async (kind) => {
+    // External connections and saved API keys do not belong to OAuth replacement.
+    const calls: AccountRequest[] = [];
+    const app = await mount({
+      onAccountsRequest: async (request) => {
+        calls.push(request);
+        return ok({
+          kind: "catalog",
+          catalog: {
+            ...catalog,
+            worktreeId: request.worktreeId,
+            accounts: kind === "external OAuth" ? [] : catalog.accounts,
+            ...(kind === "external OAuth"
+              ? {
+                  existingAccounts: [
+                    { provider: "fixture", name: "Fixture", type: "oauth" as const },
+                  ],
+                }
+              : {}),
+          },
+        });
+      },
+    });
+    try {
+      await app.open();
+      app.mockInput.pressKey("j");
+      app.mockInput.pressKey("r", { shift: true });
+      await app.render();
+
+      expect(calls.map((request) => request.type)).toEqual(["list"]);
+      expect(app.get("accounts-picker").visible).toBe(true);
+      expect(app.get("accounts-secret").visible).toBe(false);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Closing an authentication check aborts its wait and cancels a late login without reopening", async () => {
+  // Closing cannot leave an unobserved interactive operation running after the check resolves.
+  const checking = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+  const calls: AccountRequest[] = [];
+  let checkSignal: AbortSignal | undefined;
+  const app = await mount({
+    onAccountsRequest: async (request, signal) => {
+      calls.push(request);
+      if (request.type === "check") {
+        checkSignal = signal;
+        return checking.promise;
+      }
+      return ok({
+        kind: "catalog",
+        catalog: { ...connectedOAuth, worktreeId: request.worktreeId },
+      });
+    },
+  });
+  try {
+    await app.open();
+    app.mockInput.pressKey("j");
+    app.mockInput.pressEnter();
+    await app.render();
+    app.mockInput.pressEscape();
+    await app.render();
+    expect(checkSignal?.aborted).toBe(true);
+
+    checking.resolve(
+      ok({
+        kind: "login",
+        login: {
+          id: "late-recovery",
+          intent: "reauthenticate",
+          revision: 1,
+          status: "pending",
+          events: [],
+        },
+      }),
+    );
+    await app.render();
+    expect(app.get("accounts-picker").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
+    expect(calls.filter((request) => request.type === "cancel")).toEqual([
+      {
+        type: "cancel",
+        worktreeId: app.selection.worktree!.id,
+        flowId: "late-recovery",
+      },
+    ]);
+  } finally {
+    checking.resolve(err(new CancelledError()));
+    await app.close();
+  }
+});
+
 test("Account lookup failures preserve drafts and never resend to the model", async () => {
   // Unavailability errors stop at the host UI boundary.
   const app = await mount({

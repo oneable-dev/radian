@@ -34,6 +34,7 @@ import { privateDirectory } from "../runtime/storage.ts";
 import { createUsageCache, UsageMonitor } from "../usage/monitor.ts";
 import { providerUsageResolver } from "../usage/providers/index.ts";
 import { providerUsageAdapter } from "../providers/index.ts";
+import { assessAuthentication } from "./auth-assessment.ts";
 import type {
   AccountInfo,
   AccountReply,
@@ -79,7 +80,12 @@ type State = Static<typeof stateSchema>;
 
 type StoredAccount = State["accounts"][number];
 
+type ReauthenticationTarget = { id: string; credential: Credential; activeOnly: boolean };
+
 type Login = {
+  accepted?: boolean;
+  detachRequest?: () => void;
+  adopt?: () => void;
   worktreeId: string;
   view: LoginView;
   controller: AbortController;
@@ -637,7 +643,13 @@ export class AccountManager {
 
         const namedAccountKey = providerUsageAdapter(provider)?.usage.namedAccountKey;
 
-        return namedAccountKey ? ok({ ...result.value, key: namedAccountKey(accountId) }) : result;
+        return namedAccountKey
+          ? ok({
+              ...result.value,
+              credentialFingerprint: result.value.credentialFingerprint ?? result.value.key,
+              key: namedAccountKey(accountId),
+            })
+          : result;
       },
       undefined,
       undefined,
@@ -716,7 +728,7 @@ export class AccountManager {
       if (selected === id || fallback === id) {
         void pending
           .then((view) => {
-            view.usage.invalidate(provider);
+            view.usage.invalidate(provider, { credentialsChanged: true });
             for (const listener of view.listeners) {
               listener(provider);
             }
@@ -981,6 +993,129 @@ export class AccountManager {
     );
   }
 
+  private reauthenticationTarget(
+    request: Extract<AccountRequest, { type: "check" | "reauthenticate" }>,
+    checkRevision = true,
+  ): Result<StoredAccount, ExpectedError> {
+    if (checkRevision && request.revision !== this.state.revision) {
+      return err(
+        new AccountError("ACCOUNT_CONFLICT", "Accounts changed. Refresh before reauthenticating."),
+      );
+    }
+
+    const account = this.state.accounts.find(
+      (account) => account.id === request.accountId && account.provider === request.provider,
+    );
+    if (!account) {
+      return err(new AccountError("ACCOUNT_NOT_FOUND", "That managed account no longer exists."));
+    }
+    if (account.credential.type !== "oauth") {
+      return err(
+        new CapabilityError("Only named Radian-managed OAuth accounts can be reauthenticated."),
+      );
+    }
+    if (
+      request.type === "check" &&
+      this.selection(request.worktreeId, request.provider) !== account.id
+    ) {
+      return err(
+        new AccountError("ACCOUNT_CONFLICT", "Only the explicitly active account can be checked."),
+      );
+    }
+
+    return ok(account);
+  }
+
+  private async reauthenticate(
+    request: Extract<AccountRequest, { type: "check" | "reauthenticate" }>,
+    signal?: AbortSignal,
+  ): Promise<Result<AccountReply, ExpectedError>> {
+    let target = this.reauthenticationTarget(request);
+    if (!target.ok) {
+      return target;
+    }
+
+    if (request.type === "check") {
+      const catalog = async (warning?: string): Promise<Result<AccountReply, ExpectedError>> => {
+        const warnings = [warning, this.persistenceWarning].filter(Boolean).join("\n");
+
+        return ok({
+          kind: "catalog",
+          catalog: await this.catalog(request.worktreeId),
+          ...(warnings ? { warning: warnings } : {}),
+        });
+      };
+      if (request.provider !== "anthropic") {
+        return catalog(
+          "Automatic authentication checks are not supported for this provider. Use explicit reauthentication if needed.",
+        );
+      }
+
+      const view = await this.workspace(request.worktreeId);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const version = JSON.stringify(target.value.credential);
+        const inspected = await view.usage.inspect(
+          request.provider,
+          signal ?? new AbortController().signal,
+        );
+        if (this.stopped || signal?.aborted) {
+          return err(new CancelledError());
+        }
+        target = this.reauthenticationTarget(request, false);
+        if (!target.ok) {
+          return target;
+        }
+        // Normal SDK refresh is allowed one settled retry; stale evidence never starts login.
+        if (
+          version !== JSON.stringify(target.value.credential) ||
+          (!inspected.ok && inspected.error.code === "CANCELLED")
+        ) {
+          if (attempt === 0) {
+            continue;
+          }
+          return err(
+            new AccountError(
+              "ACCOUNT_CONFLICT",
+              "Authentication changed while checking. Refresh and retry.",
+            ),
+          );
+        }
+        if (!inspected.ok) {
+          if (inspected.error.code === "USAGE_AUTH_REQUIRED") {
+            break;
+          }
+          return catalog(
+            "Authentication could not be verified. Check the connection or explicitly reauthenticate.",
+          );
+        }
+
+        const assessment = assessAuthentication(inspected.value);
+        if (assessment.status !== "reauth-required") {
+          return catalog(assessment.status === "indeterminate" ? assessment.message : undefined);
+        }
+        break;
+      }
+    }
+
+    const account = target.value;
+
+    return this.begin(
+      {
+        type: "login",
+        worktreeId: request.worktreeId,
+        provider: request.provider,
+        method: "oauth",
+        label: account.label,
+      },
+      {
+        id: account.id,
+        credential: structuredClone(account.credential),
+        activeOnly: request.type === "check",
+      },
+      signal,
+    );
+  }
+
   async handle(
     request: AccountRequest,
     signal?: AbortSignal,
@@ -1023,6 +1158,9 @@ export class AccountManager {
           ? ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId) })
           : removed;
       }
+      case "check":
+      case "reauthenticate":
+        return this.reauthenticate(request, signal);
       case "login":
         return this.begin(request);
       default: {
@@ -1035,9 +1173,11 @@ export class AccountManager {
             ),
           );
         }
+        // Only poll/answer adopts the flow. Cancellation must never start provider login.
         if (request.type === "cancel") {
           this.cancel(flow);
         } else if (request.type === "answer") {
+          flow.adopt?.();
           if (flow.view.status !== "pending" || flow.answer?.id !== request.promptId) {
             return err(
               new AccountError(
@@ -1058,8 +1198,12 @@ export class AccountManager {
           delete flow.view.prompt;
           this.publish(flow);
           answer.resolve(request.value);
-        } else if (flow.view.revision <= request.revision && flow.view.status === "pending") {
-          await this.wait(flow, signal);
+        } else {
+          // Adopt before a long poll waits; provider notifications may satisfy it immediately.
+          flow.adopt?.();
+          if (flow.view.revision <= request.revision && flow.view.status === "pending") {
+            await this.wait(flow, signal);
+          }
         }
 
         return ok({ kind: "login", login: structuredClone(flow.view) });
@@ -1094,10 +1238,13 @@ export class AccountManager {
   }
 
   private cancel(flow: Login): void {
-    if (flow.view.status !== "pending") {
+    if (flow.view.status !== "pending" || flow.accepted) {
       return;
     }
 
+    flow.detachRequest?.();
+    delete flow.detachRequest;
+    delete flow.adopt;
     flow.controller.abort();
     flow.answer?.reject(new CancelledError());
     flow.answer = undefined;
@@ -1160,8 +1307,140 @@ export class AccountManager {
     });
   }
 
+  private remoteIdentity(credential: Credential): string | undefined {
+    return credential.type === "oauth" && typeof credential.accountId === "string"
+      ? credential.accountId.trim() || undefined
+      : undefined;
+  }
+
+  private async saveLogin(
+    flow: Login,
+    request: Extract<AccountRequest, { type: "login" }>,
+    credential: Credential,
+    target?: ReauthenticationTarget,
+  ): Promise<Result<StoredAccount, ExpectedError>> {
+    if (!Value.Check(credentialSchema, credential) || (target && credential.type !== "oauth")) {
+      return err(
+        new AccountError("ACCOUNT_LOGIN_FAILED", "Provider returned an unsupported credential."),
+      );
+    }
+
+    const identity = this.remoteIdentity(credential);
+    if (target) {
+      const previousIdentity = this.remoteIdentity(target.credential);
+      if (identity && previousIdentity && identity !== previousIdentity) {
+        return err(
+          new AccountError(
+            "ACCOUNT_CONFLICT",
+            "Login belongs to a different remote account. The saved credential was retained.",
+          ),
+        );
+      }
+      if (!identity || !previousIdentity) {
+        const confirmation = await this.prompt(flow, {
+          type: "select",
+          message:
+            "Radian cannot verify that this login belongs to the same remote user. Replace this saved account's credential? All worktree selections will stay unchanged.",
+          options: [
+            { id: "keep", label: "Keep the existing credential" },
+            { id: "replace", label: "Replace the credential" },
+          ],
+        });
+        if (confirmation !== "replace") {
+          this.cancel(flow);
+          return err(new CancelledError());
+        }
+      }
+    }
+
+    const persist = () =>
+      this.serialize(async (): Promise<Result<StoredAccount, ExpectedError>> => {
+        if (flow.controller.signal.aborted) {
+          return err(new CancelledError());
+        }
+        const existing = target
+          ? this.state.accounts.find(
+              (account) => account.id === target.id && account.provider === request.provider,
+            )
+          : undefined;
+        if (target && !existing) {
+          return err(
+            new AccountError(
+              "ACCOUNT_NOT_FOUND",
+              "That account was deleted during login. No account was added.",
+            ),
+          );
+        }
+        if (target && JSON.stringify(existing!.credential) !== JSON.stringify(target.credential)) {
+          return err(
+            new AccountError(
+              "ACCOUNT_CONFLICT",
+              "The account credential changed during login. The newer credential was retained; retry reauthentication.",
+            ),
+          );
+        }
+        if (
+          identity &&
+          this.state.accounts.some(
+            (account) =>
+              account.provider === request.provider &&
+              account.id !== target?.id &&
+              this.remoteIdentity(account.credential) === identity,
+          )
+        ) {
+          return err(
+            new AccountError(
+              "ACCOUNT_CONFLICT",
+              "That provider account is already saved. Use its existing account or reauthenticate it explicitly.",
+            ),
+          );
+        }
+
+        const state = structuredClone(this.state);
+        const account: StoredAccount = existing
+          ? { ...existing, credential }
+          : {
+              id: crypto.randomUUID(),
+              provider: request.provider,
+              label: request.label.trim(),
+              credential,
+            };
+        if (target) {
+          state.accounts[state.accounts.findIndex((account) => account.id === target.id)] = account;
+        } else {
+          state.accounts.push(account);
+        }
+        state.revision++;
+        // After acceptance, cancelling/closing the flow cannot imply credential rollback.
+        flow.accepted = true;
+        const saved = await this.commit(state);
+        if (!saved.ok) {
+          if (!target) {
+            return saved;
+          }
+          // Remote OAuth succeeded. Keep the replacement authoritative even if storage failed.
+          this.state = state;
+          this.persistenceWarning =
+            "Account reauthenticated in memory, but saving failed. Keep this daemon running and repair account storage before restarting.";
+          flow.view.warning = this.persistenceWarning;
+          for (const listener of this.listeners) {
+            listener();
+          }
+        }
+        if (target) {
+          this.notifyCredential(target.id, request.provider);
+        }
+
+        return ok(account);
+      });
+
+    return target ? this.lock(target.id, persist) : persist();
+  }
+
   private async begin(
     request: Extract<AccountRequest, { type: "login" }>,
+    target?: ReauthenticationTarget,
+    signal?: AbortSignal,
   ): Promise<Result<AccountReply, ExpectedError>> {
     if (!request.label.trim()) {
       return err(new InputError("Account label must not be blank."));
@@ -1204,11 +1483,38 @@ export class AccountManager {
       );
     }
 
+    if (this.stopped || signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (target) {
+      const current = this.state.accounts.find(
+        (account) => account.id === target.id && account.provider === request.provider,
+      );
+      if (
+        !current ||
+        JSON.stringify(current.credential) !== JSON.stringify(target.credential) ||
+        (target.activeOnly && this.selection(request.worktreeId, request.provider) !== target.id)
+      ) {
+        return err(
+          new AccountError(
+            "ACCOUNT_CONFLICT",
+            "Authentication changed before login could start. Refresh and retry.",
+          ),
+        );
+      }
+    }
+
     const id = crypto.randomUUID();
     const controller = new AbortController();
     const flow: Login = {
       worktreeId: request.worktreeId,
-      view: { id, revision: 0, status: "pending", events: [] },
+      view: {
+        id,
+        revision: 0,
+        status: "pending",
+        events: [],
+        ...(target ? { intent: "reauthenticate" as const } : {}),
+      },
       controller,
       listeners: new Set(),
       timer: setTimeout(
@@ -1216,138 +1522,144 @@ export class AccountManager {
           this.cancel(flow);
           this.logins.delete(id);
         },
-        15 * 60 * 1000,
+        signal ? 10000 : 15 * 60 * 1000,
       ),
     };
 
     this.logins.set(id, flow);
-    flow.task = (async () => {
-      let credential: Credential;
-      try {
-        credential = await method.login!(
-          {
-            signal: controller.signal,
-            prompt: (prompt) => this.prompt(flow, prompt),
-            notify: (event) => {
-              if (flow.view.status !== "pending") {
-                return;
-              }
-              if (event.type === "auth_url") {
-                flow.view.events.push({
-                  message: event.instructions ?? "Complete login in your browser.",
-                  url: event.url,
-                });
-              } else if (event.type === "device_code") {
-                flow.view.events.push({
-                  message: `Open the URL and enter this device code.${event.expiresInSeconds ? ` Expires in ${Math.ceil(event.expiresInSeconds / 60)} minute(s).` : ""}`,
-                  url: event.verificationUri,
-                  code: event.userCode,
-                });
-              } else if (event.type === "info") {
-                flow.view.events.push({ message: event.message });
-                for (const link of event.links ?? []) {
-                  flow.view.events.push({ message: link.label ?? "Login link", url: link.url });
+    if (signal) {
+      const abort = () => this.cancel(flow);
+      flow.detachRequest = () => signal.removeEventListener("abort", abort);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) {
+        abort();
+      }
+    }
+    const run = () =>
+      (async () => {
+        let credential: Credential;
+        try {
+          credential = await method.login!(
+            {
+              signal: controller.signal,
+              prompt: (prompt) => this.prompt(flow, prompt),
+              notify: (event) => {
+                if (flow.view.status !== "pending") {
+                  return;
                 }
-              } else {
-                flow.view.events.push({ message: event.message });
-              }
+                if (event.type === "auth_url") {
+                  flow.view.events.push({
+                    message: event.instructions ?? "Complete login in your browser.",
+                    url: event.url,
+                  });
+                } else if (event.type === "device_code") {
+                  flow.view.events.push({
+                    message: `Open the URL and enter this device code.${event.expiresInSeconds ? ` Expires in ${Math.ceil(event.expiresInSeconds / 60)} minute(s).` : ""}`,
+                    url: event.verificationUri,
+                    code: event.userCode,
+                  });
+                } else if (event.type === "info") {
+                  flow.view.events.push({ message: event.message });
+                  for (const link of event.links ?? []) {
+                    flow.view.events.push({ message: link.label ?? "Login link", url: link.url });
+                  }
+                } else {
+                  flow.view.events.push({ message: event.message });
+                }
 
-              flow.view.events = flow.view.events.slice(-16);
-              this.publish(flow);
+                flow.view.events = flow.view.events.slice(-16);
+                this.publish(flow);
+              },
             },
-          },
-          { agentName: "radian", getDeviceId: () => this.state.deviceId! },
-        );
-      } catch (error) {
+            { agentName: "radian", getDeviceId: () => this.state.deviceId! },
+          );
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          // Provider OAuth implementations have an exception-based, untyped external-failure contract.
+          // Never forward token responses, authorization codes or SDK error messages to shared logs/UI.
+          if (!externalAuthFailure(error) && !knownError(error)) {
+            throw error;
+          }
+
+          flow.view.status = "error";
+          flow.view.error =
+            "Login failed. Check the provider, connection and selected login method, then try again.";
+          delete flow.view.prompt;
+          this.publish(flow);
+
+          return;
+        }
+        if (controller.signal.aborted || flow.view.status !== "pending") {
+          return;
+        }
+
+        const saved = await this.saveLogin(flow, request, credential, target);
         if (controller.signal.aborted) {
           return;
         }
-        // Provider OAuth implementations have an exception-based, untyped external-failure contract.
-        // Never forward token responses, authorization codes or SDK error messages to shared logs/UI.
-        if (!externalAuthFailure(error) && !knownError(error)) {
-          throw error;
+        if (saved.ok) {
+          flow.view.status = "complete";
+          flow.view.account = this.info(saved.value);
+        } else {
+          flow.view.status = "error";
+          flow.view.error =
+            saved.error.code === "ACCOUNT_CONFLICT" || saved.error.code === "ACCOUNT_NOT_FOUND"
+              ? saved.error.message
+              : `[${saved.error.code}] Could not save the account. Existing accounts and selections were retained.`;
         }
 
-        flow.view.status = "error";
-        flow.view.error =
-          "Login failed. Check the provider, connection and selected login method, then try again.";
+        flow.view.events = [];
         delete flow.view.prompt;
         this.publish(flow);
+      })()
+        .catch((error) => {
+          if (error instanceof CancelledError && controller.signal.aborted) {
+            return;
+          }
+          reportUnexpected(error, "account login");
+          if (controller.signal.aborted || flow.view.status === "cancelled") {
+            return;
+          }
+          flow.view.status = "error";
+          flow.view.error = "Unexpected login failure. Inspect runtime.log.";
+          delete flow.view.prompt;
+          this.publish(flow);
+        })
+        .finally(() => {
+          flow.detachRequest?.();
+          delete flow.detachRequest;
+        });
 
+    const adopt = () => {
+      flow.detachRequest?.();
+      delete flow.detachRequest;
+      delete flow.adopt;
+      if (flow.view.status !== "pending") {
         return;
       }
-      if (controller.signal.aborted || flow.view.status !== "pending") {
-        return;
+
+      clearTimeout(flow.timer);
+      flow.timer = setTimeout(
+        () => {
+          this.cancel(flow);
+          this.logins.delete(id);
+        },
+        15 * 60 * 1000,
+      );
+      flow.task = run();
+    };
+    if (signal) {
+      // Native Request.signal need not abort after response delivery. Receipt, not
+      // transport completion, transfers ownership and permits remote interaction.
+      if (flow.view.status === "pending") {
+        flow.adopt = adopt;
       }
-
-      const saved = await this.serialize(async () => {
-        if (controller.signal.aborted) {
-          return err(new CancelledError());
-        }
-        if (!Value.Check(credentialSchema, credential)) {
-          return err(
-            new AccountError(
-              "ACCOUNT_LOGIN_FAILED",
-              "Provider returned an unsupported credential.",
-            ),
-          );
-        }
-        if (
-          credential.type === "oauth" &&
-          typeof credential.accountId === "string" &&
-          credential.accountId.trim() &&
-          this.state.accounts.some(
-            (account) =>
-              account.provider === request.provider &&
-              account.credential.type === "oauth" &&
-              "accountId" in account.credential &&
-              account.credential.accountId === credential.accountId,
-          )
-        ) {
-          return err(
-            new AccountError(
-              "ACCOUNT_CONFLICT",
-              "That provider account is already saved. Use the existing account; to replace its login, first switch affected worktrees away and delete the old local account.",
-            ),
-          );
-        }
-
-        const account: StoredAccount = {
-          id: crypto.randomUUID(),
-          provider: request.provider,
-          label: request.label.trim(),
-          credential,
-        };
-        const state = structuredClone(this.state);
-
-        state.accounts.push(account);
-        state.revision++;
-
-        const saved = await this.commit(state);
-
-        return saved.ok ? ok(account) : saved;
-      });
-      if (saved.ok) {
-        flow.view.status = "complete";
-        flow.view.account = this.info(saved.value);
-      } else {
-        flow.view.status = "error";
-        flow.view.error =
-          saved.error.code === "ACCOUNT_CONFLICT"
-            ? saved.error.message
-            : `[${saved.error.code}] Could not save the new account. Existing accounts and selections were retained.`;
-      }
-
-      flow.view.events = [];
-      delete flow.view.prompt;
-      this.publish(flow);
-    })().catch((error) => {
-      reportUnexpected(error, "account login");
-      flow.view.status = "error";
-      flow.view.error = "Unexpected login failure. Inspect runtime.log.";
-      delete flow.view.prompt;
-      this.publish(flow);
-    });
+    } else {
+      // In-process callers without request ownership retain immediate SDK semantics.
+      adopt();
+    }
 
     return ok({ kind: "login", login: structuredClone(flow.view) });
   }

@@ -23,17 +23,17 @@ export function providerUsageResolver(
       // A runtime snapshot can be stale or refer to a different pinned, named account.
       auth = await runtime.checkAuth(provider, { signal });
     } catch (error) {
-      if (signal.aborted) {
+      if (
+        signal.aborted &&
+        (error === signal.reason || error instanceof ModelsError || knownError(error))
+      ) {
         return err(new CancelledError());
       }
       if (error instanceof ModelsError && (error.code === "auth" || error.code === "oauth")) {
         return err(
-          new UsageError(
-            "USAGE_AUTH_REQUIRED",
-            "Could not resolve the provider login.",
-            undefined,
-            { cause: error },
-          ),
+          new UsageError("USAGE_QUERY_FAILED", "Could not resolve the provider login.", undefined, {
+            cause: error,
+          }),
         );
       }
       const known = knownError(error);

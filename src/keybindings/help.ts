@@ -75,6 +75,8 @@ const labels: Partial<Record<CommandId, string>> = {
   "transcript.find-forward": "Find the next literal character on the logical line",
   "transcript.find-backward": "Find the previous literal character on the logical line",
   "accounts.rename": "Rename the selected account (shared across worktrees)",
+  "accounts.reauthenticate": "Reauthenticate the selected saved OAuth account",
+  "accounts.choose": "Select an account or check the active OAuth account",
   "extension.submit": "Accept the extension input or selected choice",
   "extension.dismiss": "Cancel the extension dialog",
   "extension.search": "Search extension choices",

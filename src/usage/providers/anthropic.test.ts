@@ -233,13 +233,13 @@ test.each([
 
   const failure = expectError(await resolver("anthropic", signal()));
 
-  expect(failure.code).toBe("USAGE_AUTH_REQUIRED");
+  expect(failure.code).toBe("USAGE_PROTOCOL_ERROR");
   expect(fetched).toBe(0);
 });
 
 test.each([
   [401, "USAGE_AUTH_REQUIRED"],
-  [403, "USAGE_AUTH_REQUIRED"],
+  [403, "USAGE_QUERY_FAILED"],
   [429, "USAGE_RATE_LIMITED"],
   [503, "USAGE_QUERY_FAILED"],
 ] as const)("HTTP %d produces %s without reading private error bodies", async (status, code) => {
@@ -379,8 +379,8 @@ test("Expected auth and cancellation failures remain typed but auth implementati
   const failures = await Promise.all(resolvers.map((resolver) => resolver("anthropic", signal())));
 
   expect(failures.map((result) => expectError(result).code)).toEqual([
-    "USAGE_AUTH_REQUIRED",
-    "USAGE_AUTH_REQUIRED",
+    "USAGE_QUERY_FAILED",
+    "USAGE_QUERY_FAILED",
     "STORAGE_FAILED",
     "CANCELLED",
   ]);

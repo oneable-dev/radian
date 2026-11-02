@@ -27,6 +27,7 @@ const oneShot = new Set<CommandId>([
   "accounts.choose",
   "accounts.dismiss",
   "accounts.rename",
+  "accounts.reauthenticate",
   "accounts.delete",
   "accounts.browser",
   "accounts.copy-url",

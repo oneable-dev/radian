@@ -598,6 +598,7 @@ export class WorkspaceRuntime {
         "agent-dashboard",
         "accounts",
         "account-labels",
+        "account-reauthentication",
         "extension-ui",
         "popup-preload",
       ],

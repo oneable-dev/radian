@@ -80,6 +80,8 @@ export const loginViewSchema = Type.Object({
       code: Type.Optional(Type.String()),
     }),
   ),
+  intent: Type.Optional(Type.Literal("reauthenticate")),
+  warning: Type.Optional(Type.String()),
   prompt: Type.Optional(promptSchema),
   account: Type.Optional(accountInfoSchema),
   error: Type.Optional(Type.String()),
@@ -114,6 +116,26 @@ export const accountRequestSchema = Type.Union([
     {
       type: Type.Literal("delete"),
       worktreeId: id,
+      accountId: id,
+      revision: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal("check"),
+      worktreeId: id,
+      provider: id,
+      accountId: id,
+      revision: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal("reauthenticate"),
+      worktreeId: id,
+      provider: id,
       accountId: id,
       revision: Type.Integer({ minimum: 0 }),
     },

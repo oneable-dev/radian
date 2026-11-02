@@ -36,7 +36,7 @@ const failed = (previous: ProviderUsage, error: ExpectedError): ProviderUsage =>
   errorCode: error instanceof UsageError ? error.code : "USAGE_QUERY_FAILED",
 });
 
-type RefreshMode = "cached" | UsageRefreshMode;
+type RefreshMode = "cached" | "inspect" | UsageRefreshMode;
 
 type RetryState = { failures: number; retryAt: number; retryAfterAt: number };
 
@@ -45,6 +45,7 @@ const retryDeadline = (retry: RetryState | undefined, mode: RefreshMode): number
   (mode === "manual" ? retry?.retryAfterAt : retry?.retryAt) ?? 0;
 
 type AccountCache = {
+  credentialFingerprint: string | undefined;
   snapshot: ProviderUsage;
   attemptedAt: number;
   minRefreshMs: number;
@@ -66,6 +67,7 @@ export class UsageMonitor {
   private providers = new Set<string>();
   private readonly snapshots = new Map<string, ProviderUsage>();
   private readonly accountKeys = new Map<string, string>();
+  private readonly accountFingerprints = new Map<string, string | undefined>();
   private readonly accounts: UsageCache;
   private readonly ownsCache: boolean;
   private readonly pending = new Map<string, Promise<void>>();
@@ -107,6 +109,7 @@ export class UsageMonitor {
         this.watchers.delete(provider);
         this.snapshots.delete(provider);
         this.accountKeys.delete(provider);
+        this.accountFingerprints.delete(provider);
         this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
         this.pending.delete(provider);
         this.providerRetries.delete(provider);
@@ -231,10 +234,23 @@ export class UsageMonitor {
     };
   }
 
-  invalidate(provider: string): void {
+  invalidate(provider: string, options: { credentialsChanged?: boolean } = {}): void {
+    const key = this.accountKeys.get(provider);
+    const account = key === undefined ? undefined : this.accounts.get(key);
+    if (options.credentialsChanged && key !== undefined && account) {
+      // Replacing the entry prevents late old-credential responses from restoring obsolete evidence.
+      this.accounts.set(key, {
+        credentialFingerprint: account.credentialFingerprint,
+        snapshot: empty(provider, "unavailable"),
+        attemptedAt: account.attemptedAt,
+        minRefreshMs: account.minRefreshMs,
+        ...(account.retry ? { retry: account.retry } : {}),
+      });
+    }
     this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
     this.pending.delete(provider);
     this.accountKeys.delete(provider);
+    this.accountFingerprints.delete(provider);
     this.providerRetries.delete(provider);
     this.publish(provider, empty(provider));
     if (this.watchers.has(provider)) {
@@ -272,7 +288,10 @@ export class UsageMonitor {
     const minRefreshAt =
       account && !account.pending ? account.attemptedAt + account.minRefreshMs : 0;
     const generation = this.generations.get(provider) ?? 0;
-    if (this.clock.now() < Math.max(minRefreshAt, this.retryAt(provider, mode))) {
+    if (
+      account?.credentialFingerprint === this.accountFingerprints.get(provider) &&
+      this.clock.now() < Math.max(minRefreshAt, this.retryAt(provider, mode))
+    ) {
       // Another monitor may have refreshed the shared account during our cooldown.
       return Promise.resolve().then(() => {
         if (
@@ -315,9 +334,86 @@ export class UsageMonitor {
     return task;
   }
 
+  async inspect(
+    provider: string,
+    signal: AbortSignal,
+  ): Promise<Result<ProviderUsage, ExpectedError>> {
+    if (this.stopped || signal.aborted) {
+      return err(new CancelledError());
+    }
+
+    const generation = this.generations.get(provider) ?? 0;
+    // Resolve the current SDK credential before consulting account evidence or cooldowns.
+    // The caller owns only its wait, not a shared request or an accepted SDK rotation.
+    const task = this.query(provider, "inspect", generation).then((result) => {
+      if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) {
+        return err(new CancelledError());
+      }
+      if (result.ok) {
+        this.providerRetries.delete(provider);
+        this.publish(provider, result.value);
+      }
+
+      return result;
+    });
+    const tracked = task.then(
+      () => {},
+      (error: unknown) => {
+        // A cancelled caller no longer owns the boundary for a late shared-source defect.
+        if (signal.aborted) {
+          reportUnexpected(error, "usage inspection");
+        }
+      },
+    );
+    this.jobs.add(tracked);
+    void tracked.then(() => {
+      this.jobs.delete(tracked);
+      this.schedule();
+    });
+    const cancelled = Promise.withResolvers<Result<ProviderUsage, ExpectedError>>();
+    const abort = () => cancelled.resolve(err(new CancelledError()));
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+    }
+    try {
+      const result = await Promise.race([task, cancelled.promise]);
+      if (this.stopped || signal.aborted || (this.generations.get(provider) ?? 0) !== generation) {
+        return err(new CancelledError());
+      }
+
+      return result;
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
+
   private async perform(provider: string, mode: RefreshMode, generation: number): Promise<void> {
+    const result = await this.query(provider, mode, generation).catch(
+      (error: unknown): Result<ProviderUsage, ExpectedError> => {
+        reportUnexpected(error, "usage source");
+
+        return err(new UsageError("USAGE_QUERY_FAILED", "Unexpected usage lookup failure."));
+      },
+    );
     if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) {
       return;
+    }
+    if (result.ok) {
+      this.providerRetries.delete(provider);
+      this.publish(provider, result.value);
+    } else if (!(result.error instanceof CancelledError)) {
+      this.fail(provider, result.error);
+    }
+  }
+
+  private async query(
+    provider: string,
+    mode: RefreshMode,
+    generation: number,
+  ): Promise<Result<ProviderUsage, ExpectedError>> {
+    if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) {
+      return err(new CancelledError());
     }
 
     const controller = new AbortController();
@@ -340,24 +436,22 @@ export class UsageMonitor {
       controller.signal.addEventListener("abort", aborted, { once: true });
     });
     const lookup = this.lookup(provider, mode, controller.signal, generation).catch(
-      (error: unknown): Result<ProviderUsage, ExpectedError> => {
-        // This is the background host boundary, not ordinary provider/input error classification.
-        reportUnexpected(error, "usage source");
-
-        return err(new UsageError("USAGE_QUERY_FAILED", "Unexpected usage lookup failure."));
+      (error: unknown) => {
+        // A timed-out or stopped query has already returned; its late source defect
+        // still needs a host boundary instead of disappearing inside Promise.race.
+        if (controller.signal.aborted) {
+          reportUnexpected(error, "usage source");
+        }
+        throw error;
       },
     );
     try {
       const result = await Promise.race([lookup, abort]);
       if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) {
-        return;
+        return err(new CancelledError());
       }
-      if (result.ok) {
-        this.providerRetries.delete(provider);
-        this.publish(provider, result.value);
-      } else if (!(result.error instanceof CancelledError)) {
-        this.fail(provider, result.error);
-      }
+
+      return result;
     } finally {
       this.clock.clearTimeout(timeout);
       this.controllers.delete(controller);
@@ -388,15 +482,30 @@ export class UsageMonitor {
     const account = resolved.value;
     if (!account) {
       this.accountKeys.delete(provider);
+      this.accountFingerprints.delete(provider);
 
       return { ok: true, value: empty(provider, "unavailable") };
     }
-    if (this.accountKeys.get(provider) !== account.key) {
+    if (
+      this.accountKeys.get(provider) !== account.key ||
+      this.accountFingerprints.get(provider) !== account.credentialFingerprint
+    ) {
       this.accountKeys.set(provider, account.key);
+      this.accountFingerprints.set(provider, account.credentialFingerprint);
       this.publish(provider, empty(account.provider));
     }
 
-    const cached = this.accounts.get(account.key);
+    let cached = this.accounts.get(account.key);
+    if (cached && cached.credentialFingerprint !== account.credentialFingerprint) {
+      cached = {
+        credentialFingerprint: account.credentialFingerprint,
+        snapshot: empty(account.provider, "unavailable"),
+        attemptedAt: cached.attemptedAt,
+        minRefreshMs: cached.minRefreshMs,
+        ...(cached.retry ? { retry: cached.retry } : {}),
+      };
+      this.accounts.set(account.key, cached);
+    }
     const minRefreshMs = account.minRefreshMs ?? 0;
     if (cached) {
       cached.minRefreshMs = minRefreshMs;
@@ -410,17 +519,24 @@ export class UsageMonitor {
       (window) => window.resetsAt !== null && window.resetsAt <= now,
     );
     const retryAt = retryDeadline(cached?.retry, mode);
-    const cacheMs = mode === "manual" ? 0 : mode === "automatic" ? 2000 : intervalMs;
+    const cacheMs = mode === "manual" ? 0 : mode === "cached" ? intervalMs : 2000;
     if (
       cached &&
       (now < cached.attemptedAt + minRefreshMs ||
         now < retryAt ||
         (cached.snapshot.status !== "loading" && !expired && now - cached.attemptedAt < cacheMs))
     ) {
-      return { ok: true, value: cached.snapshot };
+      return {
+        ok: true,
+        value:
+          cached.snapshot.status === "loading"
+            ? empty(account.provider, "unavailable")
+            : cached.snapshot,
+      };
     }
 
     const entry: AccountCache = cached ?? {
+      credentialFingerprint: account.credentialFingerprint,
       snapshot: empty(account.provider),
       attemptedAt: now,
       minRefreshMs,
@@ -460,7 +576,10 @@ export class UsageMonitor {
           delete entry.retry;
         }
         for (const [name, key] of this.accountKeys) {
-          if (key === account.key) {
+          if (
+            key === account.key &&
+            this.accountFingerprints.get(name) === account.credentialFingerprint
+          ) {
             this.publish(name, snapshot);
           }
         }
@@ -468,6 +587,9 @@ export class UsageMonitor {
         return { ok: true, value: snapshot };
       })
       .catch((error: unknown) => {
+        if (signal.aborted) {
+          reportUnexpected(error, "account usage source");
+        }
         if (current()) {
           const failure = new UsageError("USAGE_QUERY_FAILED", "Unexpected account usage failure.");
           entry.snapshot = failed(entry.snapshot, failure);

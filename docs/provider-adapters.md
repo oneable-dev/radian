@@ -86,7 +86,10 @@ metadata can explicitly report unknown. No server latency guarantee is inferred.
 
 Malformed optional quota/speed metadata remains unknown rather than becoming a model
 failure or an invented zero. Expected usage/authentication failures retain typed Results
-and stable codes; unexpected programming exceptions retain their identity.
+and stable codes; unexpected programming exceptions retain their identity. A generic 403 or opaque
+SDK authentication exception is not confirmed evidence that interactive login is required. Named
+account recovery reuses credential-bound quota evidence and account-scoped cooldowns instead of
+introducing a separate authentication probe loop; see [Account authentication recovery](account-reauthentication.md).
 
 ## Verification boundary
 

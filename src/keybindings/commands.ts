@@ -373,6 +373,7 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
     "accounts.half-page-up": [key("ctrl+u", "accounts"), key("ctrl+u", "accounts-search")],
     "accounts.half-page-down": [key("ctrl+d", "accounts"), key("ctrl+d", "accounts-search")],
     "accounts.rename": [key("r", "accounts")],
+    "accounts.reauthenticate": [key("shift+r", "accounts")],
     "accounts.delete": [key("x", "accounts")],
     "accounts.browser": [key("o", "accounts")],
     "accounts.copy-url": [key("y", "accounts")],

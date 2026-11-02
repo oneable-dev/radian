@@ -72,6 +72,42 @@ test("Existing OAuth reads only fixed HTTPS endpoints and results expose no cred
   expect(alias.key).toBe(account.key);
 });
 
+test("Token rotation changes private evidence identity without changing the account cooldown key", async () => {
+  // Token signatures can rotate while the subscription account claim stays unchanged.
+  const original = openAiUsageResolver(auth());
+  const rotated = openAiUsageResolver({
+    isUsingOAuth: () => true,
+    getAuth: async () => ({ auth: { apiKey: `${token()}.rotated` } }),
+  });
+
+  const first = expectOk(await original("openai-codex", signal()))!;
+  const second = expectOk(await rotated("openai-codex", signal()))!;
+
+  expect(second.key).toBe(first.key);
+  expect(second.credentialFingerprint).not.toBe(first.credentialFingerprint);
+  expect(first.credentialFingerprint).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("Missing resolved OAuth credentials require authentication without sending a request", async () => {
+  // Missing credentials are distinct from an opaque, unsupported token shape.
+  let fetched = 0;
+  const resolver = openAiUsageResolver(
+    {
+      isUsingOAuth: () => true,
+      getAuth: async () => undefined,
+    },
+    async () => {
+      fetched++;
+      return Response.json(payload());
+    },
+  );
+
+  const failure = expectError(await resolver("openai-codex", signal()));
+
+  expect(failure.code).toBe("USAGE_AUTH_REQUIRED");
+  expect(fetched).toBe(0);
+});
+
 test("API keys and other providers never reach ChatGPT account endpoints", async () => {
   let resolved = 0;
   let fetched = 0;
@@ -119,12 +155,13 @@ test("Other OAuth tokens never reach OpenAI despite account headers", async () =
 
   const result = await resolver("openai", signal());
 
-  expect(expectError(result).code).toBe("USAGE_AUTH_REQUIRED");
+  expect(expectError(result).code).toBe("USAGE_PROTOCOL_ERROR");
   expect(fetched).toBe(0);
 });
 
 for (const [status, code] of [
   [401, "USAGE_AUTH_REQUIRED"],
+  [403, "USAGE_QUERY_FAILED"],
   [429, "USAGE_RATE_LIMITED"],
   [503, "USAGE_QUERY_FAILED"],
 ] as const) {
@@ -200,6 +237,6 @@ test("Classify only SDK authentication failures while preserving unexpected SDK 
     },
   });
 
-  expect(expectError(await expected("openai-codex", signal())).code).toBe("USAGE_AUTH_REQUIRED");
+  expect(expectError(await expected("openai-codex", signal())).code).toBe("USAGE_QUERY_FAILED");
   await expect(unexpected("openai-codex", signal())).rejects.toBe(defect);
 });

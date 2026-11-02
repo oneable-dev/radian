@@ -173,7 +173,7 @@ async function load(
   }
   if (!response.ok) {
     await response.body?.cancel();
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       return err(
         new UsageError(
           "USAGE_AUTH_REQUIRED",
@@ -240,17 +240,17 @@ export function openAiUsageResolver(runtime: AuthRuntime, fetcher: Fetch = fetch
     try {
       auth = await runtime.getAuth(provider, { signal });
     } catch (error) {
-      if (signal.aborted) {
+      if (
+        signal.aborted &&
+        (error === signal.reason || error instanceof ModelsError || knownError(error))
+      ) {
         return err(new CancelledError());
       }
       if (error instanceof ModelsError && (error.code === "auth" || error.code === "oauth")) {
         return err(
-          new UsageError(
-            "USAGE_AUTH_REQUIRED",
-            "Could not resolve the provider login.",
-            undefined,
-            { cause: error },
-          ),
+          new UsageError("USAGE_QUERY_FAILED", "Could not resolve the provider login.", undefined, {
+            cause: error,
+          }),
         );
       }
 
@@ -265,12 +265,18 @@ export function openAiUsageResolver(runtime: AuthRuntime, fetcher: Fetch = fetch
       return err(new CancelledError());
     }
 
-    const id = auth && accountId(auth);
-    if (!auth?.auth.apiKey || !id) {
+    if (!auth) {
+      return err(
+        new UsageError("USAGE_AUTH_REQUIRED", "The provider login has no resolved credential."),
+      );
+    }
+
+    const id = accountId(auth);
+    if (!auth.auth.apiKey || !id) {
       return err(
         new UsageError(
-          "USAGE_AUTH_REQUIRED",
-          "The provider login has no subscription account identity.",
+          "USAGE_PROTOCOL_ERROR",
+          "The provider login has no supported subscription account identity.",
         ),
       );
     }
@@ -279,6 +285,7 @@ export function openAiUsageResolver(runtime: AuthRuntime, fetcher: Fetch = fetch
 
     return ok({
       key,
+      credentialFingerprint: createHash("sha256").update(auth.auth.apiKey).digest("hex"),
       provider: "openai",
       load: (requestSignal) => load(auth, id, requestSignal, fetcher),
     });

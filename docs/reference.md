@@ -876,8 +876,12 @@ The Agent prompt completes and executes these host commands instead of sending t
   authorization-code input are masked and never enter Agent drafts or conversation history.
   **/** searches, **Ctrl+N/P** moves candidates in either focus, **j/k** navigates results, and
   **Ctrl+D/U** jumps half a list viewport. **Ctrl+C** clears only the search query. **Enter** switches
-  the account for this worktree. **Tab** moves focus from search to results, where **r** edits the
-  selected account's label and **x** opens local-account deletion confirmation. **Ctrl+R** refreshes
+  the account for this worktree. On an already-active saved OAuth account, **Enter** instead checks
+  authentication; a confirmed failure starts reauthentication for that same account. Normal expiry
+  uses SDK automatic refresh. Checks currently support Claude; unsupported or indeterminate results
+  keep the account and show a warning instead of forcing login. **Tab** moves focus from search to
+  results, where **r** edits the selected account's label, **R** explicitly reauthenticates a saved
+  OAuth account, and **x** opens local-account deletion confirmation. **Ctrl+R** refreshes
   the account list without resetting search, caret,
   focus or the selected candidate when it still exists. Label entry uses **Enter** to save
   and **Esc** to discard unsubmitted edits. Labels are shared across worktrees; renaming never changes
@@ -891,8 +895,13 @@ The Agent prompt completes and executes these host commands instead of sending t
   labels can also be renamed; an existing connection's label follows that provider's external
   authentication source, not a specific remote identity if Pi credentials are later replaced.
   **[Active]** marks the account used for that provider in this worktree, not a successful live
-  authorization check. Revoked
-  credentials may require signing in again. Supported login methods are shown only under **Add account**.
+  authorization check. Reauthentication replaces credentials while preserving the account ID, label,
+  and all workspace selections; it does not add another account. A known remote identity mismatch is
+  rejected. If same-account identity cannot be verified, explicit confirmation is required before
+  replacing credentials. External **Existing login** entries and API keys retain their existing
+  ownership and do not use this recovery flow. See [Account authentication recovery](account-reauthentication.md)
+  for evidence, cancellation, and persistence guarantees. Supported new-account login methods are
+  shown under **Add account**.
   If an existing connection cannot be checked, the popup shows a warning and keeps saved accounts available.
   Missing named accounts fail closed, never silently falling back to environment authentication.
   Named credentials, selections, and existing-connection labels are stored atomically in the daemon's
@@ -904,8 +913,9 @@ The Agent prompt completes and executes these host commands instead of sending t
   extensions. Remove that extension from your Pi configuration if you want only Radian's account
   integration; explicitly configured extensions retain their own effects. The `accounts`
   service capability is required; older services must be
-  explicitly restarted after existing jobs finish. Renaming additionally requires `account-labels`;
-  older account-switching services remain usable but reject label edits until an explicit restart.
+  explicitly restarted after existing jobs finish. Renaming additionally requires `account-labels`,
+  and authentication checks/recovery require `account-reauthentication`; older services remain usable
+  for supported operations and explicitly reject new ones without automatically restarting.
   The command accepts no arguments or images.
 - **`/model`** opens a model-and-effort popup for the **current session**. Models come from Pi's
   authenticated chat-model catalog, including configured and extension-provided models. Search starts
@@ -1291,8 +1301,11 @@ Resetting a window triggers another lookup, never an invented 0%/100%. While rec
 lookup, the last successful, unexpired account bar stays visible in muted gray with a gray spinner;
 its percentage, unit and countdown stay hidden throughout backoff and retries. Authentication failures
 (`USAGE_AUTH_REQUIRED`) instead show **auth** beside the provider icon, without a stale bar or spinner.
-Open **/accounts** to check the provider login; displaying this marker does not refresh credentials or
-start a login. A successful lookup restores the measured usage. Each provider's
+Open **/accounts** and activate the saved active OAuth account to check its login, or use **R** in
+account results for explicit reauthentication. Generic 403 responses and opaque SDK auth/refresh
+failures are indeterminate query failures, not proof that signing in is required. Displaying the
+marker never starts a login. Accepted credential replacement discards obsolete authentication evidence
+without bypassing provider cooldowns. A successful lookup restores the measured usage. Each provider's
 spinner stays beside that provider's meter, without hiding another provider's successful values.
 The first lookup also shows a spinner, without inventing a bar when no successful value exists.
 Success immediately restores the current percentage and normal bar colors. Hidden views and static

@@ -26,6 +26,17 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
           label: "Personal",
           credential: { type: "api_key", key: "private-ipc-fixture-key" },
         },
+        {
+          id: "managed-oauth",
+          provider: "fixture-oauth",
+          label: "Offline OAuth fixture",
+          credential: {
+            type: "oauth",
+            access: "private-fake-oauth",
+            refresh: "private-fake-refresh",
+            expires: 4102444800000,
+          },
+        },
       ],
     }),
     { mode: 0o600 },
@@ -46,6 +57,7 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
     throw new Error("Fixture runtime missing");
   }
   try {
+    expect(client.snapshot.capabilities).toContain("account-reauthentication");
     const one = fixture.repository.worktrees[0]!;
     const two = fixture.repository.worktrees[1]!;
     const listed = await client.accounts({ type: "list", worktreeId: one.id });
@@ -180,6 +192,74 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
         }),
       ).code,
     ).toBe("ACCOUNT_CONFLICT");
+
+    // New IPC requests reject API keys and stale/foreign targets without any live OAuth login.
+    expect(
+      expectError(
+        await client.accounts({
+          type: "reauthenticate",
+          worktreeId: one.id,
+          provider: "openai",
+          accountId: "account-a",
+          revision: shared.catalog.revision,
+        }),
+      ).code,
+    ).toBe("UNSUPPORTED_CAPABILITY");
+    expect(
+      expectError(
+        await client.accounts({
+          type: "check",
+          worktreeId: "foreign-worktree",
+          provider: "fixture-oauth",
+          accountId: "managed-oauth",
+          revision: shared.catalog.revision,
+        }),
+      ).code,
+    ).toBe("INVALID_INPUT");
+    expect(
+      expectError(
+        await client.accounts({
+          type: "check",
+          worktreeId: one.id,
+          provider: "fixture-oauth",
+          accountId: "managed-oauth",
+          revision: shared.catalog.revision,
+        }),
+      ).code,
+    ).toBe("ACCOUNT_CONFLICT");
+    const selectedOAuth = expectOk(
+      await client.accounts({
+        type: "select",
+        worktreeId: one.id,
+        provider: "fixture-oauth",
+        accountId: "managed-oauth",
+        revision: shared.catalog.revision,
+      }),
+    );
+    if (selectedOAuth.kind !== "catalog") throw new Error("Expected catalog");
+    const checked = expectOk(
+      await client.accounts({
+        type: "check",
+        worktreeId: one.id,
+        provider: "fixture-oauth",
+        accountId: "managed-oauth",
+        revision: selectedOAuth.catalog.revision,
+      }),
+    );
+    expect(checked.kind).toBe("catalog");
+    if (checked.kind === "catalog") expect(checked.warning).toContain("not supported");
+    expect(
+      expectError(
+        await client.accounts({
+          type: "reauthenticate",
+          worktreeId: one.id,
+          provider: "fixture-oauth",
+          accountId: "managed-oauth",
+          revision: selectedOAuth.catalog.revision,
+        }),
+      ).code,
+    ).toBe("UNSUPPORTED_CAPABILITY");
+    expect(JSON.stringify(checked)).not.toContain("private-fake");
   } finally {
     const pid = client.snapshot.pid;
     await client.stopRuntime();

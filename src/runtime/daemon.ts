@@ -834,6 +834,7 @@ class SharedDaemon {
         "resource-reload",
         "accounts",
         "account-labels",
+        "account-reauthentication",
         "extension-ui",
         "workspace-source",
         ...(!this.ready ? ["daemon-starting"] : []),

@@ -428,6 +428,16 @@ export class RuntimeClient {
         ),
       );
     }
+    if (
+      (request.type === "check" || request.type === "reauthenticate") &&
+      !this.state.capabilities.includes("account-reauthentication")
+    ) {
+      return err(
+        new CapabilityError(
+          "Running service predates account reauthentication. Finish work and explicitly restart it; no service was restarted.",
+        ),
+      );
+    }
     if (!Value.Check(accountRequestSchema, request)) {
       return err(new InputError("Malformed account request."));
     }
@@ -437,13 +447,14 @@ export class RuntimeClient {
 
     const instance = this.state.instance;
     const epoch = this.connectionEpoch;
+    const paths = { ...this.paths };
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(35000),
       ...(signal ? [signal] : []),
     ]);
     const attempted = await capture(() =>
-      transport(this.paths, "/accounts", {
+      transport(paths, "/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Radian-Instance": instance },
         body: JSON.stringify(request),
@@ -465,15 +476,26 @@ export class RuntimeClient {
     if (!decoded.value.ok) {
       return decoded.value;
     }
-    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) {
+    const body = decoded.value.value;
+    if (abort.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) {
+      if (
+        (request.type === "check" ||
+          request.type === "reauthenticate" ||
+          request.type === "login") &&
+        response.ok &&
+        Value.Check(accountReplySchema, body) &&
+        body.kind === "login" &&
+        body.login.status === "pending"
+      ) {
+        await this.cancelUnreceivedLogin(paths, instance, request.worktreeId, body.login.id);
+      }
       return err(
         new CancelledError(
-          "Account reply belongs to an outdated connection. Check account state before retrying a change.",
+          "Account reply was cancelled or belongs to an outdated connection. Cleanup is best effort; check account state before retrying a change.",
         ),
       );
     }
 
-    const body = decoded.value.value;
     if (!response.ok) {
       return Value.Check(replySchema, body) && !body.ok
         ? err(remoteError(body.error))
@@ -483,6 +505,45 @@ export class RuntimeClient {
     return Value.Check(accountReplySchema, body)
       ? ok(body)
       : err(new ProtocolError("Malformed account response."));
+  }
+
+  private async cancelUnreceivedLogin(
+    paths: RuntimePaths,
+    instance: string,
+    worktreeId: string,
+    flowId: string,
+  ): Promise<void> {
+    // Never target a replacement daemon or reuse the cancelled request/stream signal.
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve();
+      }, 2000);
+    });
+    const cleanup = capture(async () => {
+      const response = await transport(paths, "/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Radian-Instance": instance },
+        body: JSON.stringify({ type: "cancel", worktreeId, flowId }),
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        await response.value.body?.cancel();
+      }
+      // Expected transport failures leave server receipt expiry as the fallback.
+    })
+      .then(() => {})
+      .catch((error: unknown) => {
+        reportUnexpected(error, "unreceived account login cleanup");
+      });
+    try {
+      await Promise.race([cleanup, deadline]);
+    } finally {
+      clearTimeout(timer!);
+      controller.abort();
+    }
   }
 
   async models(

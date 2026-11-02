@@ -210,7 +210,7 @@ async function load(
     return err(new CancelledError());
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       return err(
         new UsageError(
           "USAGE_AUTH_REQUIRED",
@@ -260,17 +260,17 @@ export function anthropicUsageResolver(
     try {
       auth = await runtime.getAuth(provider, { signal });
     } catch (error) {
-      if (signal.aborted) {
+      if (
+        signal.aborted &&
+        (error === signal.reason || error instanceof ModelsError || knownError(error))
+      ) {
         return err(new CancelledError());
       }
       if (error instanceof ModelsError && (error.code === "auth" || error.code === "oauth")) {
         return err(
-          new UsageError(
-            "USAGE_AUTH_REQUIRED",
-            "Could not resolve the provider login.",
-            undefined,
-            { cause: error },
-          ),
+          new UsageError("USAGE_QUERY_FAILED", "Could not resolve the provider login.", undefined, {
+            cause: error,
+          }),
         );
       }
       const known = knownError(error);
@@ -284,13 +284,19 @@ export function anthropicUsageResolver(
       return err(new CancelledError());
     }
 
-    const access = auth?.auth.apiKey;
-    // Reject API keys and other providers' tokens even if the auth type changed during lookup.
+    if (!auth) {
+      return err(
+        new UsageError("USAGE_AUTH_REQUIRED", "The provider login has no resolved credential."),
+      );
+    }
+
+    const access = auth.auth.apiKey;
+    // An unsupported credential shape is not proof that the provider rejected authentication.
     if (!access || !/^sk-ant-oat\d+-[A-Za-z0-9_-]+$/.test(access)) {
       return err(
         new UsageError(
-          "USAGE_AUTH_REQUIRED",
-          "The provider login has no Anthropic OAuth access token.",
+          "USAGE_PROTOCOL_ERROR",
+          "The provider login has no supported Anthropic OAuth access token.",
         ),
       );
     }
@@ -299,6 +305,7 @@ export function anthropicUsageResolver(
 
     return ok({
       key,
+      credentialFingerprint: key,
       provider: "anthropic",
       minRefreshMs,
       load: (requestSignal) => load(access, requestSignal, fetcher),

@@ -211,8 +211,8 @@ test("Concurrent pinned account contexts keep their own auth checks, tokens, and
 });
 
 test.each([
-  [new ModelsError("auth", "fixture"), "USAGE_AUTH_REQUIRED"],
-  [new ModelsError("oauth", "fixture"), "USAGE_AUTH_REQUIRED"],
+  [new ModelsError("auth", "fixture"), "USAGE_QUERY_FAILED"],
+  [new ModelsError("oauth", "fixture"), "USAGE_QUERY_FAILED"],
   [new StorageError("fixture"), "STORAGE_FAILED"],
   [new CancelledError(), "CANCELLED"],
   [new DOMException("fixture", "AbortError"), "CANCELLED"],
@@ -282,7 +282,7 @@ test.each([false, true])(
       checkAuth: async () => {
         controller.abort();
         if (reject) {
-          throw new Error("cancelled fixture");
+          throw controller.signal.reason;
         }
 
         return { type: "oauth" };

@@ -59,6 +59,7 @@ type Candidate = {
   accountId?: string;
   choose: () => void;
   rename?: () => void;
+  reauthenticate?: () => void;
 };
 
 type Stage = "accounts" | "providers" | "methods" | "label" | "rename" | "login" | "delete";
@@ -102,6 +103,7 @@ export class AccountsPanel {
   private pendingReload = false;
   private activeRequest: AccountRequest["type"] | undefined;
   private watching: AbortController | undefined;
+  private checking: AbortController | undefined;
   private provider: AccountsCatalog["providers"][number] | undefined;
   private method: "api_key" | "oauth" = "oauth";
   private promptId: string | undefined;
@@ -265,6 +267,7 @@ export class AccountsPanel {
         ["accounts.next", "Next"],
         ["accounts.half-page-down", "½ page"],
         ["accounts.rename", "Rename account"],
+        ["accounts.reauthenticate", "Reauthenticate"],
         ["accounts.delete", "Delete account"],
         ["accounts.browser", "Open browser"],
         ["accounts.copy-url", "Copy URL"],
@@ -284,6 +287,11 @@ export class AccountsPanel {
         ([command]) =>
           command !== "accounts.rename" ||
           (this.stage === "accounts" && !this.busy && !!this.filtered[this.cursor]?.rename),
+      )
+      .filter(
+        ([command]) =>
+          command !== "accounts.reauthenticate" ||
+          (this.stage === "accounts" && !this.busy && !!this.filtered[this.cursor]?.reauthenticate),
       )
       .filter(([command]) => command !== "accounts.search" || this.search.field.visible)
       .filter(
@@ -374,7 +382,9 @@ export class AccountsPanel {
       restore &&
       this.busy &&
       this.activeRequest &&
-      ["select", "rename", "delete", "login", "answer"].includes(this.activeRequest)
+      ["select", "rename", "delete", "login", "reauthenticate", "answer"].includes(
+        this.activeRequest,
+      )
     ) {
       this.actions.notice(
         "Account action is still settling. Closing does not undo an accepted save or selection; reopen /accounts to confirm before retrying.",
@@ -382,6 +392,8 @@ export class AccountsPanel {
       );
     }
 
+    this.checking?.abort();
+    this.checking = undefined;
     this.activeRequest = undefined;
     this.epoch++;
     this.root.visible = false;
@@ -448,10 +460,17 @@ export class AccountsPanel {
       this.search.setCounts(null);
     }
 
+    const checking = request.type === "check" ? new AbortController() : undefined;
+    if (checking) {
+      this.checking = checking;
+    }
     let result: Result<AccountReply, ExpectedError>;
     try {
-      result = await this.actions.request(request, undefined, refresh);
+      result = await this.actions.request(request, checking?.signal, refresh);
     } finally {
+      if (checking && this.checking === checking) {
+        this.checking = undefined;
+      }
       if (this.visible && epoch === this.epoch) {
         this.busy = false;
         this.activeRequest = undefined;
@@ -490,7 +509,8 @@ export class AccountsPanel {
     }
     if (result.value.kind === "catalog") {
       const preserveSearch =
-        this.stage === "accounts" && (request.type === "list" || request.type === "select");
+        this.stage === "accounts" &&
+        (request.type === "list" || request.type === "select" || request.type === "check");
       this.catalog = result.value.catalog;
       this.main(preserveSearch);
 
@@ -500,7 +520,11 @@ export class AccountsPanel {
       }
     } else {
       this.accept(result.value.login);
-      if (request.type === "login") {
+      if (
+        request.type === "login" ||
+        request.type === "check" ||
+        request.type === "reauthenticate"
+      ) {
         this.launch(() => this.watch());
       }
     }
@@ -610,8 +634,36 @@ export class AccountsPanel {
           accountId: account.id,
           label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`,
           detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`,
-          choose: () => choose(account.id),
+          choose: () => {
+            if (account.type === "oauth" && catalog.selections[provider] === account.id) {
+              this.launch(() =>
+                this.perform({
+                  type: "check",
+                  worktreeId,
+                  provider,
+                  accountId: account.id,
+                  revision: catalog.revision,
+                }),
+              );
+            } else {
+              choose(account.id);
+            }
+          },
           rename: () => this.rename(provider, account.id, account.label),
+          ...(account.type === "oauth"
+            ? {
+                reauthenticate: () =>
+                  this.launch(() =>
+                    this.perform({
+                      type: "reauthenticate",
+                      worktreeId,
+                      provider,
+                      accountId: account.id,
+                      revision: catalog.revision,
+                    }),
+                  ),
+              }
+            : {}),
         });
       }
     }
@@ -668,9 +720,14 @@ export class AccountsPanel {
     this.flow = login;
     if (login.status === "complete") {
       this.actions.notice(
-        `Account added: ${singleLine(login.account?.label ?? "new account")}. Select it explicitly to use it in this worktree.`,
+        login.intent === "reauthenticate"
+          ? `Account reauthenticated: ${singleLine(login.account?.label ?? "account")}. Existing selections were retained.`
+          : `Account added: ${singleLine(login.account?.label ?? "new account")}. Select it explicitly to use it in this worktree.`,
         { level: "success" },
       );
+      if (login.warning) {
+        this.actions.notice(login.warning, { level: "warning", source: "Accounts" });
+      }
       this.main();
       if (this.busy) {
         this.pendingReload = true;
@@ -692,7 +749,7 @@ export class AccountsPanel {
     }
 
     this.stage = "login";
-    this.search.setTitle(stageTitles.login);
+    this.search.setTitle(login.intent === "reauthenticate" ? "Reauthenticate" : stageTitles.login);
     this.resize();
     this.details.visible = true;
     this.body.content = login.events
@@ -1077,6 +1134,13 @@ export class AccountsPanel {
     if (command === "accounts.rename") {
       if (this.stage === "accounts" && !this.busy) {
         this.filtered[this.cursor]?.rename?.();
+      }
+
+      return;
+    }
+    if (command === "accounts.reauthenticate") {
+      if (this.stage === "accounts" && !this.busy) {
+        this.filtered[this.cursor]?.reauthenticate?.();
       }
 
       return;

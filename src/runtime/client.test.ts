@@ -28,6 +28,7 @@ const encoder = new TextEncoder();
 
 type RuntimeRequestOptions = Omit<NonNullable<Parameters<typeof fetch>[1]>, "body"> & {
   body?: string | null;
+  unix?: string;
 };
 
 function stubFetch(
@@ -174,6 +175,212 @@ test("Legacy account services reject label edits before transport without restar
     mocked.mockRestore();
   }
 });
+
+test.each(["check", "reauthenticate"] as const)(
+  "Legacy account services reject %s before transport without restart",
+  async (type) => {
+    // The additive capability is required even when ordinary account management is available.
+    const state = { ...snapshot(), capabilities: ["accounts", "account-labels"] };
+    const before = structuredClone(state);
+    const mocked = stubFetch(async () => {
+      throw new Error("Unsupported account requests must not reach transport");
+    });
+    const client = new RuntimeClient(paths, state);
+    try {
+      const result = await client.accounts({
+        type,
+        worktreeId: "one",
+        provider: "anthropic",
+        accountId: "managed",
+        revision: 1,
+      });
+
+      // The client leaves running work and the cached catalog completely untouched.
+      expect(expectError(result).code).toBe("UNSUPPORTED_CAPABILITY");
+      expect(expectError(result).message).toContain("explicitly restart");
+      expect(mocked).not.toHaveBeenCalled();
+      expect(client.snapshot).toEqual(before);
+    } finally {
+      await client.disconnect();
+      mocked.mockRestore();
+    }
+  },
+);
+
+test("Discarded login replies cancel only against their captured socket and daemon instance", async () => {
+  // A replacement daemon may be connected before the original login response is decoded.
+  jest.useFakeTimers();
+  const initial = { ...snapshot(), capabilities: ["accounts", "account-reauthentication"] };
+  const fresh = { ...initial, instance: "replacement" };
+  const localPaths = { ...paths };
+  const originalSocket = localPaths.socket;
+  const response = Promise.withResolvers<Response>();
+  const streams: ReturnType<typeof events>[] = [];
+  const cleanupRequests: RuntimeRequestOptions[] = [];
+  const fetchMock = stubFetch(async (input, options) => {
+    if (new URL(String(input)).pathname === "/events") {
+      const stream = events(streams.length ? fresh : initial, options?.signal);
+      streams.push(stream);
+      return stream.response;
+    }
+    if (JSON.parse(String(options?.body)).type === "reauthenticate") return response.promise;
+    cleanupRequests.push(options!);
+    // A rejected cleanup is not proof of rollback and must not replace the original cancellation.
+    return Response.json({ ok: false, error: "Old daemon unavailable" }, { status: 409 });
+  });
+  const client = new RuntimeClient(localPaths, initial);
+  try {
+    expectOk(await client.attach());
+    const pending = client.accounts({
+      type: "reauthenticate",
+      worktreeId: "one",
+      provider: "anthropic",
+      accountId: "managed",
+      revision: 1,
+    });
+    await settle();
+    streams[0]!.end();
+    await settle();
+    localPaths.socket = `${originalSocket}.replacement`;
+    await advance(250);
+    expect(client.snapshot.instance).toBe("replacement");
+
+    response.resolve(
+      Response.json({
+        kind: "login",
+        login: { id: "unreceived", revision: 0, status: "pending", events: [] },
+      }),
+    );
+    const result = await pending;
+
+    // Cleanup cannot be redirected to the new paths/instance or pass through current connection gates.
+    expect(expectError(result).code).toBe("CANCELLED");
+    expect(expectError(result).message).toContain("best effort");
+    expect(cleanupRequests).toHaveLength(1);
+    expect(cleanupRequests[0]!.unix).toBe(originalSocket);
+    expect(new Headers(cleanupRequests[0]!.headers).get("X-Radian-Instance")).toBe("first");
+    expect(JSON.parse(String(cleanupRequests[0]!.body))).toEqual({
+      type: "cancel",
+      worktreeId: "one",
+      flowId: "unreceived",
+    });
+  } finally {
+    await client.disconnect();
+    fetchMock.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+test("Login receipt cleanup has an independent two second bound even if transport never settles", async () => {
+  // Neither the caller's aborted signal nor a hung cleanup may prevent ordinary CANCELLED delivery.
+  jest.useFakeTimers();
+  const caller = new AbortController();
+  const stuck = Promise.withResolvers<Response>();
+  let cleanupSignal: AbortSignal | null | undefined;
+  let cleanupInitiallyAborted: boolean | undefined;
+  const fetchMock = stubFetch(async (_input, options) => {
+    if (JSON.parse(String(options?.body)).type === "cancel") {
+      cleanupSignal = options?.signal;
+      cleanupInitiallyAborted = cleanupSignal?.aborted;
+      return stuck.promise;
+    }
+    caller.abort();
+    return Response.json({
+      kind: "login",
+      login: { id: "unreceived", revision: 0, status: "pending", events: [] },
+    });
+  });
+  const client = new RuntimeClient(paths, {
+    ...snapshot(),
+    capabilities: ["accounts", "account-reauthentication"],
+  });
+  try {
+    let finished = false;
+    const pending = client
+      .accounts(
+        {
+          type: "check",
+          worktreeId: "one",
+          provider: "anthropic",
+          accountId: "managed",
+          revision: 1,
+        },
+        caller.signal,
+      )
+      .then((result) => {
+        finished = true;
+        return result;
+      });
+    await settle();
+    expect(cleanupInitiallyAborted).toBe(false);
+    await advance(1999);
+    expect(finished).toBe(false);
+
+    // The bounded fallback does not imply the remote cancel succeeded or an accepted save rolled back.
+    await advance(1);
+    expect(expectError(await pending).code).toBe("CANCELLED");
+    expect(cleanupSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  } finally {
+    stuck.resolve(Response.json({}));
+    await settle();
+    await client.disconnect();
+    fetchMock.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+test.each(["malformed", "http-failure", "complete", "adopted-poll"] as const)(
+  "Discarded %s replies never trigger receipt cancellation",
+  async (kind) => {
+    // Only a valid, successful, still-pending initiating reply owns an unreceived login.
+    const caller = new AbortController();
+    const fetchMock = stubFetch(async () => {
+      caller.abort();
+      return Response.json(
+        {
+          kind: "login",
+          login: {
+            id: "flow",
+            revision: 0,
+            status: kind === "complete" ? "complete" : "pending",
+            ...(kind === "malformed" ? {} : { events: [] }),
+          },
+        },
+        { status: kind === "http-failure" ? 500 : 200 },
+      );
+    });
+    const client = new RuntimeClient(paths, {
+      ...snapshot(),
+      capabilities: ["accounts", "account-reauthentication"],
+    });
+    try {
+      const result = await client.accounts(
+        kind === "adopted-poll"
+          ? {
+              type: "poll",
+              worktreeId: "one",
+              flowId: "flow",
+              revision: 0,
+            }
+          : {
+              type: "reauthenticate",
+              worktreeId: "one",
+              provider: "anthropic",
+              accountId: "managed",
+              revision: 1,
+            },
+        caller.signal,
+      );
+
+      expect(expectError(result).code).toBe("CANCELLED");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.disconnect();
+      fetchMock.mockRestore();
+    }
+  },
+);
 
 test("Session state above 8 MiB preserves conversations, drafts, and History connections", async () => {
   // Fragment real-failure-like snapshots exceeding 9 MiB from individually small sections.

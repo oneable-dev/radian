@@ -20,6 +20,8 @@ export type ProviderUsage = {
 
 export type UsageAccount = {
   readonly key: string;
+  // Private credential identity, separate from the stable account-wide cooldown key.
+  readonly credentialFingerprint?: string;
   readonly provider: string;
   // Provider-imposed minimum between usage requests, including manual refreshes.
   readonly minRefreshMs?: number;

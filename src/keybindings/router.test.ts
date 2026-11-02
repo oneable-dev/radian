@@ -298,51 +298,57 @@ test.each([
   },
 );
 
-test("Held account rename keys never become literal edits after label input takes focus", async () => {
-  // The rename command changes focus while its physical key may still be held.
-  const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
-  const input = new InputRenderable(app.renderer, { width: 60 });
+test.each([
+  ["rename", 1, "r"],
+  ["reauthenticate", 2, "R"],
+] as const)(
+  "Held account %s keys never become literal edits after authentication or label input takes focus",
+  async (command, modifiers, character) => {
+    // Account commands can change focus while their physical key is still held.
+    const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
+    const input = new InputRenderable(app.renderer, { width: 60 });
 
-  app.renderer.root.add(input);
+    app.renderer.root.add(input);
 
-  const commands: string[] = [];
-  let editing = false;
-  const router = new KeyRouter(
-    app.renderer,
-    defaultKeymap(),
-    () => (editing ? "accounts-input" : "accounts"),
-    () => true,
-    (command) => {
-      commands.push(command);
-      editing = true;
-      input.value = "ONEABLE";
-      input.focus();
-    },
-  );
-  const raw = (event: string) => {
-    const key = parseKeypress(event, { useKittyKeyboard: true });
-    if (!key) {
-      throw new Error("Invalid Kitty key");
+    const commands: string[] = [];
+    let editing = false;
+    const router = new KeyRouter(
+      app.renderer,
+      defaultKeymap(),
+      () => (editing ? "accounts-input" : "accounts"),
+      () => true,
+      (command) => {
+        commands.push(command);
+        editing = true;
+        input.value = "ONEABLE";
+        input.focus();
+      },
+    );
+    const raw = (event: string) => {
+      const key = parseKeypress(event, { useKittyKeyboard: true });
+      if (!key) {
+        throw new Error("Invalid Kitty key");
+      }
+
+      app.renderer.keyInput.processParsedKey(key);
+    };
+    try {
+      // Suppress held repeats across the context change, but restore normal typing on release.
+      raw(`\u001b[114;${modifiers}u`);
+      raw(`\u001b[114;${modifiers}:2u`);
+      expect(input.value).toBe("ONEABLE");
+      expect(commands).toEqual([`accounts.${command}`]);
+      raw(`\u001b[114;${modifiers}:3u`);
+      app.mockInput.pressKey("r", { shift: modifiers === 2 });
+
+      expect(input.value).toBe(`ONEABLE${character}`);
+      expect(commands).toEqual([`accounts.${command}`]);
+    } finally {
+      router.dispose();
+      await app.dispose();
     }
-
-    app.renderer.keyInput.processParsedKey(key);
-  };
-  try {
-    // Suppress held repeats across the context change, but restore normal typing on release.
-    raw("\u001b[114u");
-    raw("\u001b[114;1:2u");
-    expect(input.value).toBe("ONEABLE");
-    expect(commands).toEqual(["accounts.rename"]);
-    raw("\u001b[114;1:3u");
-    app.mockInput.pressKey("r");
-
-    expect(input.value).toBe("ONEABLEr");
-    expect(commands).toEqual(["accounts.rename"]);
-  } finally {
-    router.dispose();
-    await app.dispose();
-  }
-});
+  },
+);
 
 test("Default Ctrl+C reaches shared native terminals while only leader commands intercept", async () => {
   const app = await createTestRenderer({
