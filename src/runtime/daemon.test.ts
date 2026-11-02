@@ -9,6 +9,7 @@ import { WorkspaceClient } from "./workspace-client.ts";
 import { defaultPreferences, fetchSnapshot, RuntimeClient } from "./client.ts";
 import { connectRuntime, ensureSharedDaemon, prepareWorkspace } from "./lifecycle.ts";
 import { workspaceSource } from "../app/settings.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import {
   acquireRuntime,
   daemonPaths,
@@ -559,6 +560,53 @@ test("Every attached TUI receives explicit deletion summaries and cannot save de
     expect(stale.snapshot.preferences.drafts[kept]).toBe("kept draft");
   } finally {
     await Promise.all(workspaces.map((workspace) => workspace.disconnect()));
+    await stop(stateRoot);
+    await fixture.cleanup();
+  }
+}, 40000);
+
+test("Shared daemon snapshots carry session state without transcripts that TUI streams deliver", async () => {
+  // Lifecycle probes read the shared snapshot; transcripts there made it grow with every conversation.
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const config = join(fixture.directory, "settings.json");
+  await writeFile(config, JSON.stringify({ workspace: { roots: [fixture.main], maxDepth: 0 } }));
+  let workspace: WorkspaceClient | undefined;
+  try {
+    workspace = expectOk(
+      await WorkspaceClient.attach(workspaceSource({ config, cwd: fixture.main }), {
+        offline: true,
+        stateRoot,
+      }),
+    );
+    const repositorySession = expectOk(await workspace.create(fixture.main));
+    const chatSession = expectOk(await workspace.create(CHAT_SCOPE_ID));
+    expectOk(await workspace.prompt(repositorySession, "hello"));
+    expectOk(await workspace.prompt(chatSession, "hello"));
+    await until(
+      () =>
+        workspace!.snapshot.details[repositorySession]?.status === "complete" &&
+        workspace!.snapshot.details[chatSession]?.status === "complete",
+    );
+
+    // Shared session state remains available for stop warnings and CHAT command identity.
+    const shared = expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!;
+    for (const id of [repositorySession, chatSession]) {
+      expect(shared.details[id]?.status).toBe("complete");
+      expect(shared.details[id]?.conversationId).toBeTruthy();
+      expect(shared.details[id]).not.toHaveProperty("sections");
+    }
+
+    // The TUI still renders repository transcripts from their own runtime and CHAT from its state.
+    const repository = expectOk(
+      await fetchSnapshot(runtimePaths(fixture.repository.id, true, stateRoot)),
+    )!;
+    expect(repository.details[repositorySession]?.sections?.length).toBeGreaterThan(0);
+    expect(shared.chat?.details[chatSession]?.sections?.length).toBeGreaterThan(0);
+    expect(workspace.snapshot.details[repositorySession]?.sections?.length).toBeGreaterThan(0);
+    expect(workspace.snapshot.details[chatSession]?.sections?.length).toBeGreaterThan(0);
+  } finally {
+    await workspace?.disconnect();
     await stop(stateRoot);
     await fixture.cleanup();
   }

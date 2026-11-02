@@ -842,10 +842,13 @@ class SharedDaemon {
       ...(unavailable.length ? { unavailableRepositories: unavailable } : {}),
       ...(deletedScopes ? { deletedScopes } : {}),
       ...(this.chat ? { chat: this.chat.snapshot } : {}),
-      details: {
-        ...Object.assign({}, ...snapshots.map((snapshot) => snapshot.details)),
-        ...this.chat?.snapshot.details,
-      },
+      // TUIs receive repository transcripts from repository runtimes and CHAT transcripts from
+      // `chat`. Shared details carry state only, so lifecycle probes stay small.
+      details: Object.fromEntries(
+        [...snapshots.map((snapshot) => snapshot.details), this.chat?.snapshot.details ?? {}]
+          .flatMap((details) => Object.entries(details))
+          .map(([id, { sections: _sections, ...state }]) => [id, state]),
+      ),
       preferences: structuredClone(emptyPreferences),
       closingCount:
         snapshots.reduce((total, snapshot) => total + snapshot.closingCount, 0) +
