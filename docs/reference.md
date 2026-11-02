@@ -2161,11 +2161,12 @@ restart retain open-session intent and saved history, unlike closing an individu
 interrupt Agent work and close **all** owned terminals and editors; save unsaved buffers first.
 Live/test daemons and different state roots remain independent.
 
-Restart inspection and startup/shutdown confirmation retry only snapshot GET observations: at most
-four attempts per failed observation, including the initial request, with response timeouts of
-500 ms, 1 s, 2 s and 2 s. Each timeout covers both headers and the complete response body. Retries
-wait with full jitter bounded by 100 ms, 200 ms and 400 ms, respectively. Startup and shutdown each
-retain their own 15-second deadline; remaining time caps both waits and requests. Valid starting or
+Restart inspection and startup/shutdown confirmation retry only snapshot GET observations until
+the phase deadline, with response timeouts of 500 ms, 1 s and then 2 s for every later attempt.
+Each timeout covers both headers and the complete response body. Retries wait with full jitter
+bounded by 100 ms, 200 ms and then 400 ms. A daemon restoring sessions can leave snapshots
+unanswered for several seconds, so a fixed attempt count would give up before it is ready. Startup
+and shutdown each retain their own 15-second deadline; remaining time caps both waits and requests. Valid starting or
 stopping snapshots remain successful observations and allow normal phase polling within that deadline.
 Only timeouts and connection resets/broken pipes are retried; permission, protocol and identity errors
 remain terminal. Runtime absence is still a successful empty observation, not a timeout. Status keeps

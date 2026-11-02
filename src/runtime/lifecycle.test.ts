@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setSystemTime, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
@@ -18,13 +18,16 @@ test("TUI startup policy intent is restricted to the internal daemon role", () =
   expect(expectError(parseCli(["--runtime-attach-chat"])).code).toBe("INVALID_INPUT");
 });
 
-test("Readiness exhaustion returns immediately instead of resetting the retry budget", async () => {
+test("Readiness timeouts retry until the shared deadline without launching a replacement", async () => {
   // Timeout failures must not become absence and launch a replacement owner.
+  // A frozen clock jumps per request, so the 15-second budget elapses without waiting for it.
   let attempts = 0;
+  setSystemTime(new Date(1_000_000));
   const fetchMock = spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(
       async () => {
         attempts++;
+        setSystemTime(new Date(Date.now() + 2000));
         throw Object.assign(new Error("fixture timeout"), { name: "TimeoutError" });
       },
       { preconnect: fetch.preconnect },
@@ -39,10 +42,11 @@ test("Readiness exhaustion returns immediately instead of resetting the retry bu
     );
 
     expect(failure).toBeInstanceOf(ConnectionError);
-    expect(failure.message).toContain("not confirmed");
-    expect(attempts).toBe(4);
+    expect(failure.message).toContain("No lifecycle command was replayed");
+    expect(attempts).toBe(8);
   } finally {
     fetchMock.mockRestore();
+    setSystemTime();
   }
 });
 

@@ -4,7 +4,8 @@ import { fetchSnapshot } from "./client.ts";
 import type { RuntimeSnapshot } from "./protocol.ts";
 import type { RuntimePaths } from "./storage.ts";
 
-const timeouts = [500, 1000, 2000, 2000] as const;
+// The last timeout and jitter bound repeat until the caller's deadline.
+const timeouts = [500, 1000, 2000] as const;
 const jitterBounds = [100, 200, 400] as const;
 
 type ProbeDependencies = {
@@ -22,6 +23,7 @@ const defaults: ProbeDependencies = {
 };
 
 // One observation owns its retries. Valid starting/stopping replies belong to phase polling.
+// A daemon restoring sessions can block its event loop for seconds, so retries last until the deadline.
 export async function probeSnapshot(
   paths: RuntimePaths,
   deadline: number,
@@ -31,15 +33,17 @@ export async function probeSnapshot(
     "CONNECTION_TIMEOUT",
     "Snapshot observation deadline expired; lifecycle completion is not confirmed.",
   );
-  for (const [attempt, timeout] of timeouts.entries()) {
+  for (let attempt = 0; ; attempt++) {
     if (attempt > 0) {
       const remaining = deadline - dependencies.now();
       if (remaining <= 0) break;
-      const delay = Math.min(dependencies.random() * jitterBounds[attempt - 1]!, remaining);
+      const bound = jitterBounds[Math.min(attempt, jitterBounds.length) - 1]!;
+      const delay = Math.min(dependencies.random() * bound, remaining);
       if (delay > 0) await dependencies.sleep(delay);
     }
     const remaining = deadline - dependencies.now();
     if (remaining <= 0) break;
+    const timeout = timeouts[Math.min(attempt, timeouts.length - 1)]!;
     const result = await dependencies.fetchSnapshot(paths, Math.min(timeout, remaining));
     if (result.ok) return result;
     failure = result.error;

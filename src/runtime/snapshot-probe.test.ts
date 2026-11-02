@@ -19,6 +19,7 @@ function fixture(
   return {
     attempts,
     waits,
+    elapsed: () => now,
     advance: (milliseconds: number) => {
       now += milliseconds;
     },
@@ -37,15 +38,18 @@ function fixture(
   };
 }
 
-test("One failed observation stops after four attempts without trailing backoff", async () => {
-  // A fixed clock and midpoint jitter expose the entire retry schedule.
-  const probe = fixture(async () => err(timeout));
+test("A failed observation retries until the deadline without trailing backoff", async () => {
+  // A fixed clock and midpoint jitter expose the entire retry schedule; each timeout uses its budget.
+  const probe = fixture(async (milliseconds) => {
+    probe.advance(milliseconds);
+    return err(timeout);
+  });
 
   const failure = expectError(await probeSnapshot(paths, 15000, probe.dependencies));
 
-  // Exhaustion retains its cause and cannot reset another observation budget.
-  expect(probe.attempts).toEqual([500, 1000, 2000, 2000]);
-  expect(probe.waits).toEqual([50, 100, 200]);
+  // The last timeout and jitter bound repeat; remaining time caps the final request.
+  expect(probe.attempts).toEqual([500, 1000, 2000, 2000, 2000, 2000, 2000, 2000, 150]);
+  expect(probe.waits).toEqual([50, 100, 200, 200, 200, 200, 200, 200]);
   expect(failure.cause).toBe(timeout);
   expect(failure.message).toContain("not confirmed");
 });
@@ -53,12 +57,17 @@ test("One failed observation stops after four attempts without trailing backoff"
 for (const random of [0, 0.999999]) {
   test(`Full jitter stays within each retry bound with randomness ${random}`, async () => {
     // Exercise both ends of full jitter without wall-clock waits.
-    const probe = fixture(async () => err(timeout), random);
+    const probe = fixture(async (milliseconds) => {
+      probe.advance(milliseconds);
+      return err(timeout);
+    }, random);
 
     await probeSnapshot(paths, 15000, probe.dependencies);
 
-    expect(probe.waits).toEqual(random === 0 ? [] : [99.9999, 199.9998, 399.9996]);
-    expect(probe.attempts).toHaveLength(4);
+    expect(probe.waits.slice(0, 4)).toEqual(
+      random === 0 ? [] : [99.9999, 199.9998, 399.9996, 399.9996],
+    );
+    expect(probe.waits.every((wait) => wait < 400)).toBe(true);
   });
 }
 
@@ -128,8 +137,14 @@ for (const code of ["ECONNRESET", "EPIPE", "EACCES", "EPERM", "EIO"]) {
     const observed = expectError(await probeSnapshot(paths, 15000, probe.dependencies));
 
     const transient = code === "ECONNRESET" || code === "EPIPE";
-    expect(probe.attempts).toHaveLength(transient ? 4 : 1);
-    if (!transient) expect(observed).toBe(failure);
+    if (transient) {
+      // Transient failures keep retrying for the whole phase budget.
+      expect(probe.elapsed()).toBe(15000);
+      expect(observed.cause).toBe(failure);
+    } else {
+      expect(probe.attempts).toHaveLength(1);
+      expect(observed).toBe(failure);
+    }
   });
 }
 

@@ -201,7 +201,7 @@ for (const mode of ["first", "persistent", "timeout"]) {
       const stdout = new Response(child.stdout).text();
       const stderr = new Response(child.stderr).text();
       const started = Date.now();
-      const timer = setTimeout(() => child.kill("SIGTERM"), 12000);
+      const timer = setTimeout(() => child.kill("SIGTERM"), 20000);
       let code: number;
       try {
         code = await child.exited;
@@ -215,14 +215,15 @@ for (const mode of ["first", "persistent", "timeout"]) {
       const records = await retryRecords(directory);
       fixturePid = records.find((record) => record.type === "launch")!.pid;
 
-      // Four failed reads terminate instead of launching again or reporting a false success.
+      // Failed reads retry until the deadline, then terminate instead of launching again or
+      // reporting a false success.
+      const snapshots = records.filter((record) => record.type === "snapshot");
       expect(records.filter((record) => record.type === "launch")).toHaveLength(1);
       expect(records.filter((record) => record.type === "mutation")).toHaveLength(0);
-      expect(records.filter((record) => record.type === "snapshot")).toHaveLength(
-        mode === "timeout" ? 4 : 2,
-      );
+      if (mode === "timeout") expect(snapshots.length).toBeGreaterThan(4);
+      else expect(snapshots).toHaveLength(2);
       expect(code).toBe(mode === "timeout" ? 1 : 0);
-      expect(elapsed).toBeLessThan(11000);
+      expect(elapsed).toBeLessThan(mode === "timeout" ? 18000 : 11000);
       if (mode === "timeout") {
         expect(error).toContain("CONNECTION_TIMEOUT");
         expect(error).toContain("not confirmed");
@@ -292,7 +293,7 @@ for (const mode of ["first", "persistent", "timeout"]) {
       }
       await rm(directory, { recursive: true, force: true });
     }
-  }, 20000);
+  }, 35000);
 }
 
 function administrativeSnapshot(): RuntimeSnapshot {
