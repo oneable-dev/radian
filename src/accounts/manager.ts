@@ -33,6 +33,7 @@ import { err, ok, type Result } from "../result.ts";
 import { privateDirectory } from "../runtime/storage.ts";
 import { createUsageCache, UsageMonitor } from "../usage/monitor.ts";
 import { providerUsageResolver } from "../usage/providers/index.ts";
+import { providerUsageAdapter } from "../providers/index.ts";
 import type {
   AccountInfo,
   AccountReply,
@@ -630,14 +631,13 @@ export class AccountManager {
 
         const result = await scope.run(selections, () => resolve(provider, signal));
         const accountId = selections[provider];
-        if (!result.ok || !result.value || provider !== "anthropic" || !accountId) {
+        if (!result.ok || !result.value || !accountId) {
           return result;
         }
 
-        // Opaque OAuth access tokens rotate. Keep the same named account's quota cache and cooldown.
-        const key = createHash("sha256").update(`anthropic\0account\0${accountId}`).digest("hex");
+        const namedAccountKey = providerUsageAdapter(provider)?.usage.namedAccountKey;
 
-        return ok({ ...result.value, key });
+        return namedAccountKey ? ok({ ...result.value, key: namedAccountKey(accountId) }) : result;
       },
       undefined,
       undefined,

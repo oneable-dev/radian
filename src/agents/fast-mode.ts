@@ -2,19 +2,20 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { CapabilityError, capture, InputError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import { providerAdapter } from "../providers/index.ts";
 
 const entryType = "radian.fast-mode.v1";
 type FastChoice = Pick<Model<Api>, "provider" | "api" | "id"> & { enabled: boolean };
 const scope = (model: Pick<Model<Api>, "provider" | "api" | "id">) =>
   JSON.stringify([model.provider, model.api, model.id]);
-const supported = (api: string) => api === "openai-responses" || api === "openai-codex-responses";
+const supported = (model: Model<Api> | undefined) =>
+  !!model && providerAdapter(model)?.fast.supports(model) === true;
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const choice = (value: unknown): value is FastChoice =>
   record(value) &&
   typeof value.provider === "string" &&
   typeof value.api === "string" &&
-  supported(value.api) &&
   typeof value.id === "string" &&
   typeof value.enabled === "boolean";
 
@@ -53,7 +54,7 @@ export class FastMode {
       });
       pi.registerCommand("fast", {
         description:
-          "Toggle priority requests for this model in this session: /fast [on|off|status]. May increase usage.",
+          "Toggle Fast requests for this model in this session: /fast [on|off|status]. May increase usage.",
         getArgumentCompletions: (prefix) =>
           ["on", "off", "status"]
             .filter((value) => value.startsWith(prefix))
@@ -86,7 +87,7 @@ export class FastMode {
           }
 
           ctx.ui.notify(
-            `fast ${result.value ? "on" : "off"} (this conversation)${result.value ? " · priority may increase usage" : ""}`,
+            `fast ${result.value ? "on" : "off"} (this conversation)${result.value ? ` · ${providerAdapter(ctx.model)?.fast.warning ?? "Fast requests may increase usage"}` : ""}`,
             "info",
           );
         },
@@ -107,13 +108,14 @@ export class FastMode {
   }
 
   read(model: Model<Api> | undefined): boolean | null {
-    if (!this.active || !model || !supported(model.api)) {
+    if (!this.active || !model || !supported(model)) {
       return null;
     }
 
     const key = scope(model);
 
-    return this.observed.get(key) ?? this.requested.get(key) ?? false;
+    // An outgoing or confirmed observation never cancels an explicit user preference.
+    return this.requested.get(key) ?? this.observed.get(key) ?? false;
   }
 
   command(
@@ -124,10 +126,8 @@ export class FastMode {
     if (!["", "on", "off", "status"].includes(action)) {
       return err(new InputError("Usage: /fast [on|off|status]"));
     }
-    if (!this.active || !model || !supported(model.api)) {
-      return err(
-        new CapabilityError("Priority requests are not supported by this model provider."),
-      );
+    if (!this.active || !model || !supported(model)) {
+      return err(new CapabilityError("Fast requests are not supported by this model connection."));
     }
     if (action === "status") {
       return ok(this.read(model) === true);
@@ -142,29 +142,17 @@ export class FastMode {
   }
 
   apply(payload: unknown, model: Model<Api>): unknown {
-    if (!this.active || !supported(model.api) || !record(payload) || payload.model !== model.id) {
+    if (!this.active) {
       return payload;
     }
 
-    const requested = this.requested.get(scope(model));
-    if (requested === true) {
-      return { ...payload, service_tier: "priority" };
-    }
-    if (
-      requested === false &&
-      (payload.service_tier === "priority" || payload.service_tier === "fast")
-    ) {
-      const next = { ...payload };
-      delete next.service_tier;
+    const adapter = providerAdapter(model);
 
-      return next;
-    }
-
-    return payload;
+    return adapter ? adapter.fast.apply(payload, model, this.requested.get(scope(model))) : payload;
   }
 
   observe(model: Model<Api>, enabled: boolean): void {
-    if (this.active && supported(model.api)) {
+    if (this.active && supported(model)) {
       this.observed.set(scope(model), enabled);
     }
   }

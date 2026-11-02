@@ -120,6 +120,40 @@ test("Recovery and History share files while closed conversations stay unrecover
   }
 });
 
+test.each([true, false, null])(
+  "Provider-confirmed Fast %s round trips without replacing preference or requiring legacy fields",
+  async (observed) => {
+    // Old snapshots have only a Fast preference; newer ones may carry independent response evidence.
+    const app = await fixture();
+    try {
+      const legacy = app.record("legacy");
+      const original = app.record("current");
+      const current: SessionRecord = {
+        ...original,
+        state: {
+          ...original.state,
+          telemetry: { ...original.state.telemetry!, fastObserved: observed },
+        },
+      };
+
+      // Persist and reload through the runtime schemas, not only an in-memory object copy.
+      expectOk(await app.store.save(manifest([legacy, current])));
+      const restored = new RuntimeStore(app.paths);
+      const loaded = expectOk(await restored.load("repo"));
+      const values = loaded?.records.find(({ id }) => id === "current")?.state.telemetry;
+      const old = expectOk(await restored.readSession("tree", "legacy"))?.state.telemetry;
+
+      // Standard or unknown execution does not roll back the explicitly selected request mode.
+      expect(values?.fast).toBe(true);
+      expect(values?.fastObserved).toBe(observed);
+      expect(old?.fast).toBe(true);
+      expect(old?.fastObserved).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  },
+);
+
 test("Reopening SDK conversations in other tabs avoids duplicate saves and preserves closed history", async () => {
   // Persistence identities are SDK conversation IDs, not UI tab IDs.
   const app = await fixture();

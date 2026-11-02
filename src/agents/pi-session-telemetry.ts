@@ -8,97 +8,16 @@ import type {
   UsageSubscription,
 } from "../usage/model.ts";
 import type { FastMode } from "./fast-mode.ts";
+import { providerAdapter } from "../providers/index.ts";
+import type { ProviderObservations } from "../providers/adapter.ts";
 
-const weekMinutes = 7 * 24 * 60;
-const record = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
 const scope = (model: Model<Api>) => JSON.stringify([model.provider, model.api, model.id]);
-const priorityApi = (model: Model<Api>) =>
-  model.api === "openai-responses" || model.api === "openai-codex-responses";
-
-// Quota metadata is optional. Unsupported/malformed metadata is unknown, never a failed model request.
-function weeklyWindow(
-  used: unknown,
-  minutes: unknown,
-  reset: unknown,
-  now: number,
-): WeeklyQuota | null {
-  if (
-    typeof used !== "number" ||
-    !Number.isFinite(used) ||
-    used < 0 ||
-    used > 100 ||
-    minutes !== weekMinutes ||
-    typeof reset !== "number" ||
-    !Number.isSafeInteger(reset) ||
-    !Number.isSafeInteger(reset * 1000) ||
-    reset * 1000 <= now
-  ) {
-    return null;
-  }
-
-  return { remainingPercent: 100 - used, resetsAt: reset * 1000, observedAt: now };
-}
-
-function weeklyHeaders(headers: Record<string, string>, now: number): WeeklyQuota | null {
-  const normalized = new Map(
-    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]),
-  );
-  for (const name of ["primary", "secondary"]) {
-    const prefix = `x-codex-${name}`;
-    const used = normalized.get(`${prefix}-used-percent`);
-    const minutes = normalized.get(`${prefix}-window-minutes`);
-    const reset = normalized.get(`${prefix}-reset-at`);
-    if (
-      typeof used !== "string" ||
-      typeof minutes !== "string" ||
-      typeof reset !== "string" ||
-      !used.trim() ||
-      !minutes.trim() ||
-      !reset.trim()
-    ) {
-      continue;
-    }
-
-    const value = weeklyWindow(Number(used), Number(minutes), Number(reset), now);
-    if (value) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
-function weeklyEvent(event: Record<string, unknown>, now: number): WeeklyQuota | null {
-  // Other metered buckets are not interchangeable with the active Codex allowance.
-  if (
-    event.metered_limit_name !== undefined &&
-    event.metered_limit_name !== null &&
-    event.metered_limit_name !== "codex"
-  ) {
-    return null;
-  }
-  if (!record(event.rate_limits)) {
-    return null;
-  }
-  for (const value of [event.rate_limits.primary, event.rate_limits.secondary]) {
-    if (!record(value)) {
-      continue;
-    }
-
-    const quota = weeklyWindow(value.used_percent, value.window_minutes, value.reset_at, now);
-    if (quota) {
-      return quota;
-    }
-  }
-
-  return null;
-}
 
 // Preserves SDK observers and applies only explicitly selected, session-local request settings.
 export class PiSessionTelemetry {
   private requestScope: string | null = null;
   private fast: boolean | null = null;
+  private fastObserved: boolean | null = null;
   private weekly: WeeklyQuota | null = null;
   private contextCache: { key: string; value: SessionTelemetry["context"] } | undefined;
   private readonly previous;
@@ -131,6 +50,7 @@ export class PiSessionTelemetry {
     const next = scope(model);
     if (next !== this.requestScope) {
       this.fast = null;
+      this.fastObserved = null;
       this.weekly = null;
     }
 
@@ -143,10 +63,8 @@ export class PiSessionTelemetry {
     const outgoing = this.fastMode ? this.fastMode.apply(transformed, model) : transformed;
 
     this.useScope(model);
-    this.fast =
-      priorityApi(model) && record(outgoing)
-        ? outgoing.service_tier === "priority" || outgoing.service_tier === "fast"
-        : null;
+    this.fast = providerAdapter(model)?.fast.readPayload(outgoing, model) ?? null;
+    this.fastObserved = null;
     if (this.fast !== null) {
       this.fastMode?.observe(model, this.fast);
     }
@@ -158,15 +76,27 @@ export class PiSessionTelemetry {
     return outgoing === transformed ? replacement : outgoing;
   };
 
-  private response: NonNullable<AgentSession["agent"]["onResponse"]> = async (response, model) => {
-    await this.previous.response?.(response, model);
-    if (model.api !== "openai-codex-responses") {
+  private observe(observations: ProviderObservations | undefined, model: Model<Api>): void {
+    if (
+      !observations ||
+      (observations.fastObserved === undefined && observations.weekly === undefined)
+    ) {
       return;
     }
 
     this.useScope(model);
-    this.weekly = weeklyHeaders(response.headers, Date.now());
+    if (observations.fastObserved !== undefined) {
+      this.fastObserved = observations.fastObserved;
+    }
+    if (observations.weekly !== undefined) {
+      this.weekly = observations.weekly;
+    }
     this.changed();
+  }
+
+  private response: NonNullable<AgentSession["agent"]["onResponse"]> = async (response, model) => {
+    await this.previous.response?.(response, model);
+    this.observe(providerAdapter(model)?.telemetry.response(response, model, Date.now()), model);
   };
 
   private event: NonNullable<AgentSession["agent"]["onProviderStreamEvent"]> = async (
@@ -174,17 +104,7 @@ export class PiSessionTelemetry {
     model,
   ) => {
     await this.previous.event?.(event, model);
-    if (
-      model.api !== "openai-codex-responses" ||
-      !record(event) ||
-      event.type !== "codex.rate_limits"
-    ) {
-      return;
-    }
-
-    this.useScope(model);
-    this.weekly = weeklyEvent(event, Date.now());
-    this.changed();
+    this.observe(providerAdapter(model)?.telemetry.event(event, model, Date.now()), model);
   };
 
   read(): SessionTelemetry {
@@ -221,6 +141,7 @@ export class PiSessionTelemetry {
       model: model?.id ?? null,
       effort: routed?.thinkingLevel ?? this.session.thinkingLevel ?? null,
       fast: this.fastMode?.read(model) ?? (matches ? this.fast : null),
+      fastObserved: matches ? this.fastObserved : null,
       context: this.contextCache.value,
       weekly: matches && this.weekly && this.weekly.resetsAt > Date.now() ? this.weekly : null,
       ...(this.usage ? { usage: this.usage.read(model?.provider ?? null) } : {}),
@@ -232,6 +153,7 @@ export class PiSessionTelemetry {
     this.requestScope = null;
     this.weekly = null;
     this.fast = null;
+    this.fastObserved = null;
     this.changed();
   }
 

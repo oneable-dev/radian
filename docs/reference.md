@@ -1217,22 +1217,40 @@ Context calculations are cached by finalized conversation position and model, no
 tokens or repaints. Missing model limits remain unknown. Existing repository services need an explicit
 restart to load this fallback; reopening only the TUI does not update it.
 
-Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models, including
-prompt completion. New conversations start **off**. Explicit choices are stored per provider, API and
-model in the saved conversation and restored after a runtime restart or when reopening that conversation
-from History. Models without a saved choice remain **off**, without needing a model request to establish
-that state. `/fast on` opts into `service_tier: priority`; `/fast off` removes an explicit priority/fast
-tier. These commands themselves never invoke a model, publish a transient Working state or add
-conversation messages. `/fast status` only reads the current state. Choices do not change effort or
-write global configuration, and observed provider tiers are not persisted as opt-ins. Saving failures
-retain the accepted choice in memory and report a warning. Priority can increase usage and is not a
-guarantee of server speed.
+Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models and supported native
+Anthropic Opus models, including prompt completion. New conversations start **off**. Explicit choices
+are stored per provider, API and model on the active conversation branch and restored after restart
+or reopening History. Models without a saved choice remain **off**, without a model request.
+OpenAI ON sends `service_tier: priority`; OFF removes an explicit priority/fast tier. Native Anthropic
+ON sends `speed: fast`; Opus 5 and 4.8 also merge `fast-mode-2026-02-01` with existing beta features,
+while Opus 5.5 needs no Fast beta. OFF removes only the Fast settings. Anthropic eligibility requires
+the `anthropic` provider, `anthropic-messages` API and HTTPS `api.anthropic.com` origin with an exact
+supported model ID. Opus 4.6/4.7, other gateways and the external `claude-code-stream-json` transport
+are not advertised as controlled by this native integration. Opus 4.8 Fast is deprecated and scheduled
+for removal on November 30, 2026. Native API-key/OAuth requests keep using SDK-owned authentication;
+toggling does not check entitlement or imply that the account has Fast access.
+
+These commands never invoke a model, publish a transient Working state or add conversation messages.
+`/fast status` only reads the current selection. Choices do not change effort or global configuration,
+and outgoing/confirmed provider observations are never persisted as opt-ins. Explicit selections take
+precedence over observations; standard or unknown execution does not cancel the next-request choice.
+The optional runtime `fastObserved` value separately records provider-confirmed Fast/standard mode,
+remaining unknown before confirmation. Saving failures retain the accepted choice and warn. Fast can
+increase usage and is not a latency guarantee; Anthropic Fast uses premium pricing and a separate
+prompt cache. SDK cost estimates are not a verified bill. Parent and child choices remain independent.
 
 An existing extension registering `/fast` replaces the default control; its request observers remain
 intact. Such an extension may leave the initial state unknown until its first outgoing request.
 Older services without a registered `/fast` command reject it from the new client rather than treating
 it as a paid model prompt. Finish existing jobs and explicitly restart the runtime to load this control.
 Displaying usage, context or `fast` state never enables priority by itself.
+
+Radian-owned provider rules are composed by `ProviderAdapter` implementations under `src/providers/`,
+with contracts in `adapter.ts`: Fast conversion, telemetry interpretation, usage-source selection and
+private named-account identity. See [Provider adapters](provider-adapters.md) for support and ownership.
+Session preferences remain in `FastMode`, SDK hooks/context stay in `PiSessionTelemetry`, and polling,
+shared caching and cooldowns stay in `UsageMonitor`. SDK authentication and inference transport are
+not replaced. API compatibility alone never grants access to a company's account endpoint.
 
 Account usage has a provider-neutral model and runtime monitor under `src/usage/`; provider-specific
 authentication and HTTP stay in `src/usage/providers/`. Sources support **OpenAI/Codex and Claude

@@ -8,11 +8,13 @@ import { expectOk } from "../testing/results.ts";
 import { piSessionFactory } from "./pi-session-adapter.ts";
 import type { SessionExecutor } from "./session-registry.ts";
 
-async function fixture() {
+async function fixture(mode: "openai" | "anthropic" = "openai") {
   const directory = await mkdtemp(join(tmpdir(), "radian-fast-mode-"));
   const options = await offlineRuntime(join(directory, "agent"));
   const runtime = options.modelRuntime!;
-  const models = ["alpha", "beta"].map((id) => ({
+  const native = mode === "anthropic";
+  const modelIds = native ? ["claude-opus-5-5", "claude-opus-5"] : ["alpha", "beta"];
+  const models = modelIds.map((id) => ({
     id,
     name: id,
     reasoning: true,
@@ -21,20 +23,24 @@ async function fixture() {
     maxTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   }));
-  for (const provider of ["fast-fixture", "other-fast-fixture"]) {
+  const providers = native ? ["anthropic"] : ["fast-fixture", "other-fast-fixture"];
+  for (const provider of providers) {
     runtime.registerProvider(provider, {
-      api: "openai-codex-responses",
-      baseUrl: "http://127.0.0.1:1",
+      api: native ? "anthropic-messages" : "openai-codex-responses",
+      baseUrl: native ? "https://api.anthropic.com" : "http://127.0.0.1:1",
       apiKey: "offline",
       models,
     });
   }
 
-  options.model = runtime.getModel("fast-fixture", "alpha")!;
+  options.model = runtime.getModel(providers[0]!, modelIds[0]!)!;
   const scripted = options.streamFn!;
   const payloads: unknown[] = [];
   options.streamFn = async (model, context, request) => {
-    payloads.push(await request?.onPayload?.({ model: model.id, service_tier: "priority" }, model));
+    const payload = native
+      ? { model: model.id, speed: "fast", betas: ["fixture-beta", "fast-mode-2026-02-01"] }
+      : { model: model.id, service_tier: "priority" };
+    payloads.push(await request?.onPayload?.(payload, model));
 
     return scripted(model, context, request);
   };
@@ -105,6 +111,41 @@ test.each([true, false])(
       expect(app.payloads.at(-1)).toEqual({
         model: "alpha",
         ...(enabled ? { service_tier: "priority" } : {}),
+      });
+    } finally {
+      await app.cleanup();
+    }
+  },
+);
+
+test.each([true, false])(
+  "Native Anthropic Fast choice (%s) survives a fresh SDK factory without authorizing new sessions",
+  async (enabled) => {
+    // The scripted encoder exercises the same saved-entry contract without a paid Anthropic call.
+    const app = await fixture("anthropic");
+    try {
+      const first = await app.open();
+      expectOk(await first.prompt("/fast on"));
+      expectOk(await first.prompt("Persist the native Anthropic choice."));
+      if (!enabled) {
+        expectOk(await first.prompt("/fast off"));
+      }
+      const file = first.sessionFile!;
+      expectOk(await first.close());
+
+      // Restarting the session must use saved preference, not an old adapter instance or observation.
+      const restored = await app.open(file);
+      const fresh = await app.open();
+      expect(restored.state.telemetry?.fast).toBe(enabled);
+      expect(fresh.state.telemetry?.fast).toBe(false);
+      expect(app.payloads).toHaveLength(1);
+      expectOk(await restored.prompt("Check the saved native speed selection."));
+
+      // Explicit OFF removes only Fast settings; a native API entry needs no storage migration.
+      expect(app.payloads.at(-1)).toEqual({
+        model: "claude-opus-5-5",
+        ...(enabled ? { speed: "fast" } : {}),
+        betas: enabled ? ["fixture-beta", "fast-mode-2026-02-01"] : ["fixture-beta"],
       });
     } finally {
       await app.cleanup();
