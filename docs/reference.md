@@ -849,7 +849,9 @@ restoration of temporary selections after a service restart. Full transcript tex
 the legacy 12-message/12,000-character preview. Aggregate workspace snapshots have a **64 MiB receive
 limit**, separate from the 8 MiB command/PTY limits; transcript paging is not implemented.
 Snapshots, which lifecycle checks, connection and `runtime status` read, carry session state
-without transcript sections. TUIs request event streams with transcript changes: the first frame
+without transcript text: no sections, and an empty `output` preview wherever sections exist
+(sessions without sections keep their legacy output). TUIs request event streams with transcript
+changes: the first frame
 of each stream carries every transcript, and later frames carry only new or changed sections, so
 streaming output no longer resends whole conversations. Repository transcripts come from
 repository runtimes and CHAT transcripts from the shared daemon. Older TUIs keep receiving full

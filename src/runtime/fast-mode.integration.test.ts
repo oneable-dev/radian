@@ -6,6 +6,7 @@ import { expectOk } from "../testing/results.ts";
 import { fetchSnapshot, RuntimeClient } from "./client.ts";
 import { connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive, runtimePaths } from "./storage.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 async function until(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 10000;
@@ -61,7 +62,7 @@ test("bun run restart preserves explicit Fast choices without replaying requests
     const before = client.snapshot;
     expect(before.details[id]?.telemetry?.fast).toBe(true);
     const conversation = before.details[id]!.conversationId;
-    const output = before.details[id]!.output;
+    const output = transcriptText(before.details[id]);
     await client.disconnect();
 
     // Exercise the actual package script with an isolated mode and state root.
@@ -89,7 +90,7 @@ test("bun run restart preserves explicit Fast choices without replaying requests
     expect(restored.snapshot.pid).not.toBe(before.pid);
     expect(pidAlive(before.pid)).toBe(false);
     expect(restored.snapshot.details[id]?.conversationId).toBe(conversation);
-    expect(restored.snapshot.details[id]?.output).toBe(output);
+    expect(transcriptText(restored.snapshot.details[id])).toBe(output);
     expect(restored.snapshot.details[id]?.status).toBe("complete");
     expect(restored.snapshot.details[fresh]?.sections).toEqual([]);
     expect(restored.snapshot.details[fresh]?.telemetry?.fast).toBe(false);

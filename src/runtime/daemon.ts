@@ -1,7 +1,7 @@
 import { chmod, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { snapshotEvents } from "./events.ts";
-import { TranscriptFrames, transcriptStream, withoutSections } from "./transcript-frames.ts";
+import { TranscriptFrames, transcriptStream, withoutTranscripts } from "./transcript-frames.ts";
 import { ChatRuntime } from "./chat-runtime.ts";
 import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import { accountRequestSchema } from "../accounts/model.ts";
@@ -845,7 +845,7 @@ class SharedDaemon {
       ...(this.chat ? { chat: this.chat.snapshot } : {}),
       // TUIs receive repository transcripts from repository runtimes and CHAT transcripts from
       // `chat`. Shared details carry state only, so lifecycle probes stay small.
-      details: withoutSections({
+      details: withoutTranscripts({
         ...Object.assign({}, ...snapshots.map((snapshot) => snapshot.details)),
         ...this.chat?.snapshot.details,
       }),
@@ -884,7 +884,7 @@ class SharedDaemon {
           snapshot.chat
             ? {
                 ...snapshot,
-                chat: { ...snapshot.chat, details: withoutSections(snapshot.chat.details) },
+                chat: { ...snapshot.chat, details: withoutTranscripts(snapshot.chat.details) },
               }
             : snapshot,
         );

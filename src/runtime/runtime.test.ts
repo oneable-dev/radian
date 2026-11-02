@@ -11,6 +11,7 @@ import { Value } from "typebox/value";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expectOk, expectError } from "../testing/results.ts";
 import { initialGitState } from "../git/model.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 async function until(predicate: () => Promise<boolean> | boolean): Promise<void> {
   const deadline = Date.now() + 12000;
@@ -305,7 +306,8 @@ test("new IPC adds same-worktree tabs while retaining conversations, queues, and
     await observed(
       client,
       (state) =>
-        progress(state.details[id]?.output) > 0 && state.details[id]?.pendingMessages?.length === 1,
+        progress(transcriptText(state.details[id])) > 0 &&
+        state.details[id]?.pendingMessages?.length === 1,
     );
 
     const conversation = client.snapshot.details[id]!.conversationId;
@@ -376,7 +378,8 @@ test("clear IPC replaces only current conversations while preserving cancellatio
     await observed(
       client,
       (state) =>
-        progress(state.details[id]?.output) > 0 && progress(state.details[other]?.output) > 0,
+        progress(transcriptText(state.details[id])) > 0 &&
+        progress(transcriptText(state.details[other])) > 0,
     );
 
     const previous = client.snapshot.details[id]!.conversationId!;
@@ -590,14 +593,14 @@ test("Separate processes continue agents/subagents while all UIs detach and reco
     await observed(
       client,
       (state) =>
-        progress(state.details[a]?.output) >= 1 &&
+        progress(transcriptText(state.details[a])) >= 1 &&
         state.repositories[0]?.worktrees[1]?.sessions[0]?.subagents[0]?.status === "working",
     );
 
     const pid = client.snapshot.pid;
     const instance = client.snapshot.instance;
     const child = client.snapshot.repositories[0]!.worktrees[1]!.sessions[0]!.subagents[0]!.id;
-    const before = progress(client.snapshot.details[a]?.output);
+    const before = progress(transcriptText(client.snapshot.details[a]));
 
     await client.savePreferences({
       selection: { worktreeId: feature.id, sessions: { [main.id]: a, [feature.id]: b } },
@@ -691,7 +694,7 @@ test.each(["close", "exit", "raw-exit"] as const)(
         client,
         (state) =>
           !!state.repositories[0]?.worktrees[0]?.sessions[0]?.subagents[0] &&
-          progress(state.details[other]?.output) >= 1,
+          progress(transcriptText(state.details[other])) >= 1,
       );
       await until(
         async () =>
@@ -771,7 +774,7 @@ test("Service restart restores open IDs, history, and selections without replayi
     await client.prompt(a, "read");
     await observed(client, (state) => state.details[a]?.status === "complete");
     await client.prompt(running, "slow");
-    await observed(client, (state) => progress(state.details[running]?.output) >= 1);
+    await observed(client, (state) => progress(transcriptText(state.details[running])) >= 1);
     await client.savePreferences({
       selection: {
         worktreeId: app.repository.worktrees[1]!.id,
@@ -798,7 +801,7 @@ test("Service restart restores open IDs, history, and selections without replayi
         repo.worktrees.flatMap((tree) => tree.sessions.map((session) => session.id)),
       ),
     ).toEqual([a, empty, running]);
-    expect(restored.snapshot.details[a]?.output).toContain("main-worktree-marker");
+    expect(transcriptText(restored.snapshot.details[a])).toContain("main-worktree-marker");
     expect(restored.snapshot.details[running]?.status).toBeNull();
     expect(restored.snapshot.details[running]?.error).toContain("Previous runtime ended");
     expect(restored.snapshot.preferences.selection.sessions[app.repository.worktrees[1]!.id]).toBe(
@@ -843,7 +846,7 @@ test("Existing clients reconnect to explicitly replaced services without replayi
 
     // Fresh history/capabilities and the same conversation are available without another UI launch.
     expect(client.snapshot.pid).not.toBe(pid);
-    expect(client.snapshot.details[id]?.output).toContain("main-worktree-marker");
+    expect(transcriptText(client.snapshot.details[id])).toContain("main-worktree-marker");
     expect(expectOk(await client.listHistory(worktree))).toEqual([]);
     expect(await readFile(file, "utf8")).toBe(original);
     expect(
@@ -1044,7 +1047,7 @@ test("Concurrent connections start one daemon and reclaim stale endpoints after 
 
     // Dead-owner recovery preserves the saved open item while acquiring a new process owner.
     expect(recovered.snapshot.pid).not.toBe(pid);
-    expect(recovered.snapshot.details[id]?.output).toContain("main-worktree-marker");
+    expect(transcriptText(recovered.snapshot.details[id])).toContain("main-worktree-marker");
   } finally {
     await app.cleanup();
   }
@@ -1366,7 +1369,7 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
 
     // The same file/context appears as another open item, and cross-worktree IDs stay rejected.
     expect(reopened).not.toBe(a);
-    expect(client.snapshot.details[reopened]?.output).toContain("main-worktree-marker");
+    expect(transcriptText(client.snapshot.details[reopened])).toContain("main-worktree-marker");
     expect(
       (await app.manifest()).records.find((record) => record.id === reopened)?.sessionFile,
     ).toBe(file);
@@ -1480,7 +1483,7 @@ test("Accepted-run checkpoint failures return success with warnings instead of r
     });
     const reply = await response.json();
 
-    await observed(client, (state) => progress(state.details[id]?.output) >= 1);
+    await observed(client, (state) => progress(transcriptText(state.details[id])) >= 1);
 
     // The caller is not told to retry an already running operation; durability loss is explicit.
     expect(response.status).toBe(200);

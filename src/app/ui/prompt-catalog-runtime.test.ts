@@ -12,6 +12,7 @@ import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
 import { expectOk } from "../../testing/results.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench } from "./workbench.ts";
+import { transcriptText } from "../../testing/transcript-text.ts";
 
 async function until(check: () => Promise<boolean> | boolean) {
   const deadline = Date.now() + 8000;
@@ -125,7 +126,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     await renderer.mockInput.typeText("/catalog-149");
     await visible("Catalog marker 149");
     expect(catalogs).toBe(1);
-    expect(runtime.snapshot.details[id]?.output).toBe("");
+    expect(transcriptText(runtime.snapshot.details[id])).toBe("");
     expect(renderer.renderer.root.findDescendantById("completion-loading")!.visible).toBe(false);
     input.value = "/catalog-14";
     await renderer.renderOnce();
@@ -150,7 +151,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     });
     expect(catalogs).toBe(2);
     expect(runtime.snapshot.details[id]?.conversationId).toBe(originalConversation);
-    expect(runtime.snapshot.details[id]?.output).toBe("");
+    expect(transcriptText(runtime.snapshot.details[id])).toBe("");
 
     // Server revision checks reject another UI's stale catalog commands before model delivery.
     const stale = await fetch("http://localhost/command", {

@@ -7,6 +7,7 @@ import { fetchSnapshot } from "./client.ts";
 import { connectRuntime } from "./lifecycle.ts";
 import { pidAlive, runtimePaths } from "./storage.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 async function until(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 12000;
@@ -58,11 +59,12 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
     expectOk(await workspace.prompt(bId, "read"));
     await until(
       () =>
-        workspace!.snapshot.details[aId]?.output.includes("isolated-repository-A") === true &&
-        workspace!.snapshot.details[bId]?.output.includes("isolated-repository-B") === true,
+        transcriptText(workspace!.snapshot.details[aId]).includes("isolated-repository-A") ===
+          true &&
+        transcriptText(workspace!.snapshot.details[bId]).includes("isolated-repository-B") === true,
     );
-    expect(workspace.snapshot.details[aId]?.output).not.toContain("isolated-repository-B");
-    expect(workspace.snapshot.details[bId]?.output).not.toContain("isolated-repository-A");
+    expect(transcriptText(workspace.snapshot.details[aId])).not.toContain("isolated-repository-B");
+    expect(transcriptText(workspace.snapshot.details[bId])).not.toContain("isolated-repository-A");
 
     // B's PTY creates files only in B and retains existing lease/instance checks.
     const terminal = expectOk(await workspace.createTerminal(bTree.id, { cols: 80, rows: 16 }));
@@ -158,8 +160,8 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
     workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options, connectRuntime));
     expectOk(await workspace.activate(aTree.id));
     expectOk(await workspace.activate(bTree.id));
-    expect(workspace.snapshot.details[aId]?.output).toContain("isolated-repository-A");
-    expect(workspace.snapshot.details[bId]?.output).toContain("isolated-repository-B");
+    expect(transcriptText(workspace.snapshot.details[aId])).toContain("isolated-repository-A");
+    expect(transcriptText(workspace.snapshot.details[bId])).toContain("isolated-repository-B");
     expect(workspace.snapshot.preferences.drafts).toEqual({ [aId]: "draft A", [bId]: "draft B" });
     expect(expectOk(await fetchSnapshot(aPaths))!.pid).toBe(
       expectOk(await fetchSnapshot(bPaths))!.pid,

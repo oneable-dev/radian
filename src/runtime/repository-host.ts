@@ -25,7 +25,7 @@ import {
 } from "./storage.ts";
 import { scrubPreferences } from "./workspace-preferences.ts";
 import { snapshotEvents } from "./events.ts";
-import { TranscriptFrames, transcriptStream, withoutSections } from "./transcript-frames.ts";
+import { TranscriptFrames, transcriptStream, withoutTranscripts } from "./transcript-frames.ts";
 import {
   emptyPreferences,
   errorStatus,
@@ -527,7 +527,7 @@ export class RepositoryHost {
       }
       if (path === "/snapshot" && request.method === "GET") {
         const snapshot = this.snapshot;
-        return Response.json({ ...snapshot, details: withoutSections(snapshot.details) });
+        return Response.json({ ...snapshot, details: withoutTranscripts(snapshot.details) });
       }
       if (this.stopped) {
         return rejected(new SessionError("RUNTIME_STOPPING", "Shared daemon is stopping."));

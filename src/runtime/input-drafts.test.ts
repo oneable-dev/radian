@@ -9,6 +9,7 @@ import { fetchSnapshot } from "./client.ts";
 import { connectRuntime } from "./lifecycle.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 const imageDraft = (path: string): PromptDraft => ({
   value: "Inspect [Image #1]",
@@ -98,7 +99,7 @@ test("Real IPC attachment drafts restore after reconnect and legacy input replac
 
     expect(client.snapshot.pid).toBe(pid);
     expect(client.snapshot.preferences.inputDrafts?.[id]).toEqual(draft);
-    expect(client.snapshot.details[id]?.output).toBe("");
+    expect(transcriptText(client.snapshot.details[id])).toBe("");
 
     const legacy = structuredClone(client.snapshot.preferences);
     delete legacy.inputDrafts;

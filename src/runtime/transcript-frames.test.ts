@@ -4,7 +4,7 @@ import type { ExecutionState } from "../agents/session-registry.ts";
 import type { TranscriptSection } from "../agents/transcript.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import type { RuntimeSnapshot } from "./protocol.ts";
-import { TranscriptFrames, TranscriptStore, withoutSections } from "./transcript-frames.ts";
+import { TranscriptFrames, TranscriptStore, withoutTranscripts } from "./transcript-frames.ts";
 
 function section(id: string, text = id): TranscriptSection {
   return { id, kind: "assistant", title: "Agent", text, status: "complete" };
@@ -144,6 +144,16 @@ test("Order changes must reference delivered sections", () => {
   );
 });
 
-test("Lifecycle snapshots omit sections without changing other session state", () => {
-  expect(withoutSections({ a: state([section("a1")]) })).toEqual({ a: state() });
+test("Transcript text leaves session state while legacy output stays", () => {
+  // The output preview repeats transcript text; only sessions without sections render it.
+  const live = { ...state([section("a1")]), output: "Agent: a1", finalOutput: "a1" };
+  const legacy = { ...state(), output: "legacy output" };
+
+  expect(withoutTranscripts({ live, legacy })).toEqual({
+    live: { ...state(), output: "", finalOutput: "a1" },
+    legacy,
+  });
+  expect(new TranscriptFrames().split({ live, legacy }).details).toEqual(
+    withoutTranscripts({ live, legacy }),
+  );
 });

@@ -8,6 +8,7 @@ import { fetchSnapshot, type RuntimeClient } from "./client.ts";
 import { connectRuntime } from "./lifecycle.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
 import { pidAlive, runtimePaths } from "./storage.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 async function until(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 10000;
@@ -106,8 +107,9 @@ test("External Git worktrees are detected by the same daemon and immediately sup
       expectOk(await client.prompt(addedSession, "read"));
       await until(
         () =>
-          client.snapshot.details[addedSession]?.output.includes("dynamically-added-worktree") ===
-          true,
+          transcriptText(client.snapshot.details[addedSession]).includes(
+            "dynamically-added-worktree",
+          ) === true,
       );
 
       const editor = expectOk(await client.openEditor(added, { cols: 80, rows: 20 }));
@@ -227,7 +229,8 @@ test("Shared daemons watch SDK-inactive repositories and activate them in the sa
       const id = expectOk(await workspace.create(added));
       expectOk(await workspace.prompt(id, "read"));
       await until(
-        () => workspace!.snapshot.details[id]?.output.includes("main-worktree-marker") === true,
+        () =>
+          transcriptText(workspace!.snapshot.details[id]).includes("main-worktree-marker") === true,
       );
       await app.git(added, ["switch", "-c", "after-activation"]);
       await until(() =>

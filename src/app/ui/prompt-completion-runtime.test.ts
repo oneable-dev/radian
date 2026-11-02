@@ -11,6 +11,7 @@ import { fetchSnapshot } from "../../runtime/client.ts";
 import { connectRuntime } from "../../runtime/lifecycle.ts";
 import { runtimePaths } from "../../runtime/storage.ts";
 import { expectOk } from "../../testing/results.ts";
+import { transcriptText } from "../../testing/transcript-text.ts";
 
 async function until(check: () => Promise<boolean> | boolean) {
   const deadline = Date.now() + 8000;
@@ -89,7 +90,7 @@ test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes s
     await app.renderOnce();
     expect(input.value).toBe("[File #1] ");
     expect(input.submission.text).toBe(`@${JSON.stringify(join(fixture.main, "workspace.txt"))} `);
-    expect(client.snapshot.details[id]?.output).toBe("");
+    expect(transcriptText(client.snapshot.details[id])).toBe("");
 
     input.value = "";
     await app.mockInput.typeText("/completion-pro");

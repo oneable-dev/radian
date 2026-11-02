@@ -11,10 +11,16 @@ export function transcriptStream(request: Request): boolean {
   return new URL(request.url).searchParams.get("transcripts") === "1";
 }
 
-/** Session state without transcript sections, for snapshots that lifecycle checks read. */
-export function withoutSections(details: Details): Record<string, ExecutionState> {
+/**
+ * Session state without transcript text, for snapshots and transcript streams. The `output`
+ * preview repeats the transcript, so it stays only for sessions without sections, which render it.
+ */
+export function withoutTranscripts(details: Details): Record<string, ExecutionState> {
   return Object.fromEntries(
-    Object.entries(details).map(([id, { sections: _sections, ...state }]) => [id, state]),
+    Object.entries(details).map(([id, { sections, ...state }]) => [
+      id,
+      sections ? { ...state, output: "" } : state,
+    ]),
   );
 }
 
@@ -65,7 +71,7 @@ export class TranscriptFrames {
       if (!(id in details)) this.sent.delete(id);
     }
 
-    return { details: withoutSections(details), transcripts };
+    return { details: withoutTranscripts(details), transcripts };
   }
 }
 

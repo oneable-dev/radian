@@ -10,6 +10,7 @@ import packageInfo from "../../package.json";
 import { buildDistribution } from "../build.ts";
 import { probeExtensionResources } from "../testing/extension-resources.ts";
 import { probeExtensionParent } from "../testing/extension-parent.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 15000;
@@ -119,7 +120,8 @@ test("Standalone executables manage offline sessions and terminal supervisors ou
     const session = expectOk(await client.create(tree.id));
     expectOk(await client.prompt(session, "read"));
     await until(
-      () => client!.snapshot.details[session]?.output.includes("main-worktree-marker") === true,
+      () =>
+        transcriptText(client!.snapshot.details[session]).includes("main-worktree-marker") === true,
     );
 
     const terminal = expectOk(await client.createTerminal(tree.id, { cols: 80, rows: 16 }));

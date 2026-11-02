@@ -10,6 +10,7 @@ import { emptyPreferences, replySchema, type RuntimeSnapshot } from "./protocol.
 import { daemonPaths, pidAlive, runtimePaths, RuntimeStore } from "./storage.ts";
 import type { SessionRecord } from "../agents/session-registry.ts";
 import { planFilePath, saveTaskPlan } from "../agents/task-plan-store.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 // Every test owns a temporary repository, state root and daemon; removals target fixtures only.
 const entry = join(import.meta.dir, "..", "index.ts");
@@ -269,8 +270,9 @@ test("Deleting a linked worktree stops its live sessions and terminals but keeps
     expectOk(await client.prompt(sibling, "read"));
     await until(
       () =>
-        client.snapshot.details[deleted]?.output.includes("feature-worktree-marker") === true &&
-        client.snapshot.details[sibling]?.output.includes("main-worktree-marker") === true,
+        transcriptText(client.snapshot.details[deleted]).includes("feature-worktree-marker") ===
+          true &&
+        transcriptText(client.snapshot.details[sibling]).includes("main-worktree-marker") === true,
       "both transcripts",
     );
     const terminal = expectOk(await client.createTerminal(app.feature, { cols: 80, rows: 24 }));
@@ -332,7 +334,8 @@ test("A worktree recreated at the same path is a fresh generation without old se
     const old = expectOk(await client.create(app.feature));
     expectOk(await client.prompt(old, "read"));
     await until(
-      () => client.snapshot.details[old]?.output.includes("feature-worktree-marker") === true,
+      () =>
+        transcriptText(client.snapshot.details[old]).includes("feature-worktree-marker") === true,
       "old transcript",
     );
 
@@ -347,7 +350,8 @@ test("A worktree recreated at the same path is a fresh generation without old se
     expect(fresh).not.toBe(old);
     expectOk(await client.prompt(fresh, "read"));
     await until(
-      () => client.snapshot.details[fresh]?.output.includes("feature-worktree-marker") === true,
+      () =>
+        transcriptText(client.snapshot.details[fresh]).includes("feature-worktree-marker") === true,
       "fresh transcript",
     );
     expect(client.snapshot.details[old]).toBeUndefined();
@@ -373,7 +377,9 @@ test("Deleting a whole repository removes its owned runtime state but preserves 
     const session = expectOk(await client.create(app.feature));
     expectOk(await client.prompt(session, "read"));
     await until(
-      () => client.snapshot.details[session]?.output.includes("feature-worktree-marker") === true,
+      () =>
+        transcriptText(client.snapshot.details[session]).includes("feature-worktree-marker") ===
+        true,
       "transcript",
     );
     await until(
@@ -419,7 +425,9 @@ test("A durable pending cleanup resumes after restart without activating the del
     const session = expectOk(await client.create(app.feature));
     expectOk(await client.prompt(session, "read"));
     await until(
-      () => client.snapshot.details[session]?.output.includes("feature-worktree-marker") === true,
+      () =>
+        transcriptText(client.snapshot.details[session]).includes("feature-worktree-marker") ===
+        true,
       "transcript",
     );
     await client.disconnect();
@@ -476,7 +484,9 @@ test("Renaming a live worktree still preserves its sessions and records", async 
     const session = expectOk(await client.create(app.feature));
     expectOk(await client.prompt(session, "read"));
     await until(
-      () => client.snapshot.details[session]?.output.includes("feature-worktree-marker") === true,
+      () =>
+        transcriptText(client.snapshot.details[session]).includes("feature-worktree-marker") ===
+        true,
       "transcript",
     );
     const files = await transcripts(app.runtime.directory);

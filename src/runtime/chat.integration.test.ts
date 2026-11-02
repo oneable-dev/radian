@@ -8,6 +8,7 @@ import { RuntimeClient, fetchSnapshot } from "./client.ts";
 import { connectChatRuntime, connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive } from "./storage.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 async function until(predicate: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 10000;
@@ -36,7 +37,7 @@ test("No-repository clients share CHAT execution across detach and reconnect wit
     await first.disconnect();
     first = undefined;
     await until(() => second!.snapshot.chat?.details[id]?.status === "complete");
-    expect(second.snapshot.chat?.details[id]?.output).toContain("Offline SDK fixture");
+    expect(transcriptText(second.snapshot.chat?.details[id])).toContain("Offline SDK fixture");
     expect(second.snapshot.chat?.sessions).toHaveLength(1);
     const history = expectOk(await second.listChatHistory());
     expect(history.find((item) => item.openSessionId === id)).toBeTruthy();

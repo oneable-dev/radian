@@ -8,6 +8,7 @@ import { expectError, expectOk } from "../testing/results.ts";
 import { fetchSnapshot, RuntimeClient } from "./client.ts";
 import { connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive, runtimePaths } from "./storage.ts";
+import { transcriptText } from "../testing/transcript-text.ts";
 
 const entry = join(import.meta.dir, "..", "index.ts");
 
@@ -580,7 +581,7 @@ test("Headless daemon startup discovers current settings and restores active sta
     const id = expectOk(await client.create(app.main));
     expectOk(await client.prompt(id, "read"));
     await until(
-      () => client.snapshot.details[id]?.output.includes("main-worktree-marker") === true,
+      () => transcriptText(client.snapshot.details[id]).includes("main-worktree-marker") === true,
     );
     const conversation = client.snapshot.details[id]!.conversationId;
     expect(typeof conversation).toBe("string");
@@ -598,16 +599,23 @@ test("Headless daemon startup discovers current settings and restores active sta
       async () =>
         expectOk(await fetchSnapshot(app.paths))!.details[id]?.conversationId === conversation,
     );
-    const restored = expectOk(
-      await fetchSnapshot(runtimePaths(app.repository.id, true, app.stateRoot)),
-    )!;
+    const repositoryPaths = runtimePaths(app.repository.id, true, app.stateRoot);
+    const restored = expectOk(await fetchSnapshot(repositoryPaths))!;
 
     // Previously active conversations and drafts are ready without any TUI connecting or replaying a prompt.
     expect(restored.capabilities).toContain("repository-runtime");
-    expect(restored.details[id]?.output).toContain("main-worktree-marker");
     expect(restored.details[id]?.status).not.toBe("working");
     expect(restored.preferences.drafts[id]).toBe("preserved draft");
     expect(restored.preferences.selection.sessions[app.main]).toBe(id);
+
+    // Snapshots omit transcripts; an attaching client receives the restored conversation.
+    const observer = new RuntimeClient(repositoryPaths, restored);
+    try {
+      expectOk(await observer.attach());
+      expect(transcriptText(observer.snapshot.details[id])).toContain("main-worktree-marker");
+    } finally {
+      await observer.disconnect();
+    }
   } finally {
     await app.cleanup();
   }
@@ -730,7 +738,7 @@ test("Repository disappearance blocks new work but preserves running sessions an
     const id = expectOk(await client.create(app.main));
     expectOk(await client.prompt(id, "read"));
     await until(
-      () => client.snapshot.details[id]?.output.includes("main-worktree-marker") === true,
+      () => transcriptText(client.snapshot.details[id]).includes("main-worktree-marker") === true,
     );
     const transcripts = join(
       runtimePaths(app.repository.id, true, app.stateRoot).directory,
