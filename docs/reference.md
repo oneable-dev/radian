@@ -2005,57 +2005,21 @@ records, not automatically resumed jobs; old flat histories remain readable. Roo
 a flattened ancestry-aware summary without granting arbitrary descendant control to root tools.
 The legacy `radian_subagent` spelling remains readable in stored analytics, but is not an active tool.
 
-#### Domain-role examples and global rollout
+#### Managing global profiles
 
-[`resources/agents/`](../resources/agents/) contains opt-in examples, not automatically installed
-defaults. They separate domain judgment from bounded execution and independent QA:
+Profiles are user/project configuration, not bundled role defaults. Keep personal role instructions,
+model choices, required skills and tool allowlists in your own dotfiles or configuration repository,
+and link the profile directory into `~/.pi/agent/agents`. Radian loads profiles from the configured
+user directory and trusted project directories; it does not load them directly from a dotfiles repository.
 
-| Role         | Example model                   | Effort  | Delegates |
-| ------------ | ------------------------------- | ------- | --------- |
-| Product Lead | `openai-codex/gpt-6-astra`      | `xhigh` | Yes       |
-| PM           | `openai-codex/gpt-6.1-sol`      | `high`  | No        |
-| Tech Lead    | `claude-code/claude-opus-5-5`   | `xhigh` | Yes       |
-| Engineer     | `openai-codex/gpt-6.1-sol`      | `high`  | No        |
-| UI/UX Lead   | `claude-code/claude-opus-5-5`   | `xhigh` | Yes       |
-| Designer     | `claude-code/claude-sonnet-5-5` | `high`  | No        |
-| QA           | `openai-codex/gpt-6-astra`      | `high`  | No        |
-
-These are starting configurations, not measured superiority claims. Check exact model IDs, supported
-effort, required skills and registered tools before installing them. If Sonnet 5.5 is unavailable,
-an alternative such as `openai-codex/gpt-6.1-sol` at `high` requires an explicit selection by the user;
-do not silently substitute a role's model. Provider API pricing does not necessarily describe subscription usage.
-Parent model defaults remain user settings; this example arrangement uses Astra at `xhigh`.
-
-Leads provide purpose, inputs, owned files/artifacts, constraints, expected outputs and observable
-acceptance criteria. Workers research and complete their domain work, self-verify and escalate
-ambiguity or cross-domain changes. Leads review the actual artifacts and evidence; the root resolves
-cross-domain conflicts and performs final integration review. Roles are activated only when useful,
-not as mandatory stages for every task. Waiting coordinators count toward capacity, so three Leads
-and two workers already fill all five active slots; sequence work on capacity errors.
-
-QA reports independently to the root. It checks scenarios before work, verifies actual user flows
-after work, supplies expected/actual results, reproduction steps and evidence, and retests fixes.
-It does not silently modify product code or production data. Its example reuses the existing
-`mcp__browser_use` server proxy without changing MCP configuration or requiring `directTools`.
-The proxy can technically invoke every tool on that server; avoiding `browser_extract_content`
-(which uses another model), `retry_with_browser_use_agent` and `browser_close_all` is an operational
-instruction, not enforced per-tool filtering. The profile does not grant the all-server `mcp` gateway
-or unrelated namespaces. Ask the owner for missing tool schemas and report unavailable server access
-or authentication as blocked. Browser access does not imply computer-use support. Verify only with
-tools and credentials actually available.
-
-All roles must acquire one shared browser/desktop owner through the root coordinator and explicitly
-hand off or release it. This serialization is an operational contract, not a runtime lease or enforced
-state isolation. Use disposable test state, preserve unrelated tabs/sessions and distinguish observed
-screenshots/HTML from measured layout or computed styles. Report unavailable or unperformed checks.
-
-Before global rollout, finish relevant work and ensure all consuming runtimes advertise the
-`recursive-delegation` capability; old strict parsers reject delegation metadata. Preserve user changes and back up affected configuration outside
-the discoverable `agents/*.md` directory. Edit the authoritative source of managed symlinks, not the
-Nix store or generated links. Update conflicting global instructions and command bindings, validate
-new profiles/model/effort/tools, then remove superseded profiles only after their active jobs and
-references have been migrated. Removing `commandAgents.plan` restores parent-owned planning; binding
-a command to a deleted profile fails explicitly. Preserve credentials, histories and unrelated settings.
+Before migrating global profiles, finish relevant work and ensure all consuming runtimes advertise
+the `recursive-delegation` capability; old strict parsers reject delegation metadata. Preserve user
+changes and back up affected configuration outside the discoverable `agents/*.md` directory. Edit the
+authoritative source of managed symlinks, not generated files or links. Update conflicting global
+instructions and command bindings, validate new profiles/model/effort/tools, then remove superseded
+profiles only after their active jobs and references have been migrated. Removing `commandAgents.plan`
+restores parent-owned planning; binding a command to a deleted profile fails explicitly. Preserve
+credentials, histories and unrelated settings.
 
 #### Delegation records and cleanup
 

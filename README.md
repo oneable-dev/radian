@@ -283,8 +283,9 @@ without a separate Pi CLI or Node. Define their roles, models, required skills a
 allowlists in `~/.pi/agent/agents/*.md`, then coordinate them through `radian-subagent`.
 Profiles opting into `delegation.enabled: true` may supervise their own children; omitted/false stays
 leaf-only and planning children remain read-only and non-delegating. Each root shares a maximum of
-five active descendants, 128 retained runs and depth three. See the
-[domain-role examples](resources/agents/) and [delegation contracts](docs/reference.md#agent-profiles-and-collaboration)
+five active descendants, 128 retained runs and depth three. Profiles are user/project configuration,
+not bundled role defaults; keep personal profiles in your dotfiles and link them into the user profile
+directory. See the [profile format and delegation contracts](docs/reference.md#agent-profiles-and-collaboration)
 before migrating global profiles; finish work and explicitly restart an older service first.
 MCP and Web Access are bundled; `pi-subagents` is not. Git and Neovim remain external requirements. Builds disable automatic
 project `.env` and `bunfig.toml` loading; Radian settings and explicit provider
