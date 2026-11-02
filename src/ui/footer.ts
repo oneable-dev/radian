@@ -29,13 +29,17 @@ type ProviderView = {
   readonly icon: ProviderIcon | null;
   readonly spinner: LoadingSpinner;
   recovering: boolean;
+  authRequired: boolean;
 };
 
 const cellWidth = (text: string) => Bun.stringWidth(text);
 const percentage = (value: number) => `${Math.round(Math.max(0, Math.min(100, value)))}%`;
 
+const authRequired = (usage: ProviderUsage | undefined) =>
+  usage?.status === "error" && usage.errorCode === "USAGE_AUTH_REQUIRED";
+
 function usageWindow(usage: ProviderUsage | undefined, now: number): UsageWindow | undefined {
-  if (!usage || usage.status === "unavailable") {
+  if (!usage || usage.status === "unavailable" || authRequired(usage)) {
     return undefined;
   }
 
@@ -199,13 +203,17 @@ export class Footer {
         spinner.root.position = "absolute";
         spinner.root.top = 0;
         layer.add(spinner.root);
-        view = { layer, icon, spinner, recovering: false };
+        view = { layer, icon, spinner, recovering: false, authRequired: false };
         this.providers.set(provider, view);
       }
 
       const status = snapshots[provider]?.status;
-      const recovering = status === "loading" || status === "error";
-      if (recovering && !view.recovering && view.layer.visible) {
+      view.authRequired = authRequired(snapshots[provider]);
+      const recovering = status === "loading" || (status === "error" && !view.authRequired);
+      if (view.authRequired) {
+        // A rejected login needs user attention, not an animation that promises pending results.
+        view.spinner.cancel();
+      } else if (recovering && !view.recovering && view.layer.visible) {
         view.spinner.start();
       } else if (!recovering && view.recovering) {
         view.spinner.stop();
@@ -288,7 +296,7 @@ export class Footer {
         const detail = view.recovering
           ? 1
           : 1 +
-            cellWidth(window ? percentage(window.usedPercent) : "-") +
+            cellWidth(view.authRequired ? "auth" : window ? percentage(window.usedPercent) : "-") +
             (view.spinner.root.visible ? 2 : 0);
 
         return sum + label + detail;
@@ -373,11 +381,14 @@ export class Footer {
           for (const countdown of [true, false]) {
             const meters = shown.map(({ view, window, label }) => {
               const reset = countdown && !view.recovering ? resetTime(window?.resetsAt, now) : "";
-              const value = view.recovering
-                ? ""
-                : window
-                  ? percentage(window.usedPercent) + (format === "full" ? " used" : "")
-                  : "-";
+              let value = "-";
+              if (view.authRequired) {
+                value = "auth";
+              } else if (view.recovering) {
+                value = "";
+              } else if (window) {
+                value = percentage(window.usedPercent) + (format === "full" ? " used" : "");
+              }
               const detail = format === "icons" ? "" : [value, reset].filter(Boolean).join(" ");
               const bar = barWidth && window ? "▉".repeat(barWidth) + " " : "";
               const spinnerWidth = view.recovering ? 1 : view.spinner.root.visible ? 2 : 0;
@@ -416,7 +427,8 @@ export class Footer {
               }
               view.spinner.root.left = cellWidth(meter.text) + (view.recovering ? 0 : 1);
               paintText(view.spinner.root, styles["ui.muted"]);
-              const labelStyle = styles[view.recovering ? "ui.muted" : "ui.label"];
+              const labelStyle =
+                styles[view.recovering || view.authRequired ? "ui.muted" : "ui.label"];
               chunks.push(styleChunk(`${label}${detail || bar ? " " : ""}`, labelStyle));
               if (bar && window) {
                 const filled = Math.round(

@@ -20,7 +20,6 @@ import {
   CancelledError,
   CapabilityError,
   InputError,
-  ModelSelectionError,
   StorageError,
   capture,
   knownError,
@@ -89,6 +88,10 @@ type Login = {
   task?: Promise<void>;
 };
 
+export type ModelRefresh = {
+  readonly unavailableProviders: readonly string[];
+};
+
 export type WorkspaceModels = {
   runtime: ModelRuntime;
   usage: UsageMonitor;
@@ -96,8 +99,8 @@ export type WorkspaceModels = {
   listeners: Set<(provider: string) => void>;
   catalogs: Map<string, InMemoryModelsStore>;
   refresh?: AbortController;
-  modelsKey?: string;
-  modelsTask?: { key: string; ready: Promise<Result<void, ExpectedError>> };
+  models?: { key: string; result: ModelRefresh };
+  modelsTask?: { key: string; ready: Promise<Result<ModelRefresh, ExpectedError>> };
 };
 
 const networkCodes = new Set([
@@ -745,7 +748,7 @@ export class AccountManager {
   async refreshModels(
     worktreeId: string,
     signal?: AbortSignal,
-  ): Promise<Result<void, ExpectedError>> {
+  ): Promise<Result<ModelRefresh, ExpectedError>> {
     if (signal?.aborted) {
       return err(new CancelledError());
     }
@@ -755,8 +758,8 @@ export class AccountManager {
       .sort()
       .map((provider) => [provider, this.selectionIdentity(worktreeId, provider)]);
     const key = JSON.stringify([selections, this.modelRevisions.get(worktreeId) ?? 0]);
-    if (view.modelsKey === key) {
-      return ok(undefined);
+    if (view.models?.key === key) {
+      return ok(view.models.result);
     }
     if (view.modelsTask?.key === key) {
       return view.modelsTask.ready;
@@ -769,7 +772,7 @@ export class AccountManager {
     const ready = view.scope
       .run(
         { ...this.state.selections[worktreeId] },
-        async (): Promise<Result<void, ExpectedError>> => {
+        async (): Promise<Result<ModelRefresh, ExpectedError>> => {
           const result = await view.runtime.refresh({
             allowNetwork: !this.options.offline,
             signal: controller.signal,
@@ -777,17 +780,12 @@ export class AccountManager {
           if (result.aborted || controller.signal.aborted) {
             return err(new CancelledError("Model metadata refresh was superseded or cancelled."));
           }
-          if (result.errors.size) {
-            return err(
-              new ModelSelectionError(
-                "Could not refresh model metadata for the selected authentication. The account selection and running conversations were retained.",
-              ),
-            );
-          }
+          // A broken connection must not block other providers. Exclude its possibly stale
+          // account-bound metadata and retain the warning until an explicit refresh or auth change.
+          const refreshed = { unavailableProviders: [...result.errors.keys()] };
+          view.models = { key, result: refreshed };
 
-          view.modelsKey = key;
-
-          return ok(undefined);
+          return ok(refreshed);
         },
       )
       .finally(() => {

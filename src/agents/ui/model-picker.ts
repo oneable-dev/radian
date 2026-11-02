@@ -81,6 +81,7 @@ export class ModelPicker {
   private cursor = 0;
   private loading = false;
   private loadError: string | undefined;
+  private loadWarning: string | undefined;
   private applying = false;
   private disposed = false;
 
@@ -243,6 +244,7 @@ export class ModelPicker {
     this.scope = scope;
     this.catalog = undefined;
     this.loadError = undefined;
+    this.loadWarning = undefined;
     this.filtered = [];
     this.cursor = 0;
     this.effortDrafts.clear();
@@ -395,6 +397,10 @@ export class ModelPicker {
     }
 
     this.loadError = undefined;
+    if (result.value.warning && result.value.warning !== this.loadWarning) {
+      this.actions.notice(result.value.warning, { level: "warning", source: "Models" });
+    }
+    this.loadWarning = result.value.warning;
     this.catalog = result.value;
     this.filter();
   }

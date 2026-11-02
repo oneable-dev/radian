@@ -54,6 +54,9 @@ test("Real model-selection IPC preserves conversation/authentication runtimes wi
       catalog.models.some((model) => model.provider === "radian-offline" && model.id === "fixture"),
     ).toBe(true);
     expect(catalog.effort).toBe("off");
+    // Explicit picker refresh must cross the same strict query boundary as initial discovery.
+    const refreshed = expectOk(await connected.models(session, conversation, undefined, true));
+    expect(refreshed.models).toEqual(catalog.models);
     expect(
       catalog.models.find((model) => model.provider === "radian-offline" && model.id === "fixture")!
         .efforts,

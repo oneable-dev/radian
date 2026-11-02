@@ -24,13 +24,18 @@ export const modelEffortSchema = Type.Union([
 export type ModelEffort = Static<typeof modelEffortSchema>;
 
 export const modelCatalogQuerySchema = Type.Object(
-  { sessionId: identifier, conversationId: identifier },
+  {
+    sessionId: identifier,
+    conversationId: identifier,
+    refresh: Type.Optional(Type.Literal("true")),
+  },
   { additionalProperties: false },
 );
 export const modelCatalogSchema = Type.Object({
   conversationId: identifier,
   current: Type.Union([modelIdentitySchema, Type.Null()]),
   effort: modelEffortSchema,
+  warning: Type.Optional(Type.String()),
   models: Type.Array(
     Type.Object({
       provider: identifier,

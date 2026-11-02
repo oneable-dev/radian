@@ -912,7 +912,9 @@ The Agent prompt completes and executes these host commands instead of sending t
   focused; **Ctrl+N/P** or arrows navigate matches while hjkl remain literal input. **Tab/Shift+Tab**
   cycles through search, results and editable effort controls. In results, use **j/k** to move and **h/l**
   to change effort; **/** returns to search by model name, ID or provider. **Ctrl+R** refreshes metadata
-  without resetting the query, caret, focus or a candidate that still exists.
+  without resetting the query, caret, focus or a candidate that still exists. A provider metadata
+  refresh failure omits only that provider's models and reports a shared warning; healthy providers
+  remain selectable. Check **/accounts** and use **Ctrl+R** to retry without changing running sessions.
   Model and effort clicks only stage choices. **Enter** commits the pair in one operation;
   **Esc** discards unsubmitted choices. The popup has no close icon or action-button row. The current
   model is marked and only SDK-supported effort levels are offered, using Pi's clamped preview of the
@@ -1269,7 +1271,10 @@ Detaching all TUIs stops periodic polling. Shutdown aborts lookups and invalidat
 The countdown is calculated locally and ticks every minute or at its reset deadline, without HTTP requests.
 Resetting a window triggers another lookup, never an invented 0%/100%. While recovering from a failed
 lookup, the last successful, unexpired account bar stays visible in muted gray with a gray spinner;
-its percentage, unit and countdown stay hidden throughout backoff and retries. Each provider's
+its percentage, unit and countdown stay hidden throughout backoff and retries. Authentication failures
+(`USAGE_AUTH_REQUIRED`) instead show **auth** beside the provider icon, without a stale bar or spinner.
+Open **/accounts** to check the provider login; displaying this marker does not refresh credentials or
+start a login. A successful lookup restores the measured usage. Each provider's
 spinner stays beside that provider's meter, without hiding another provider's successful values.
 The first lookup also shows a spinner, without inventing a bar when no successful value exists.
 Success immediately restores the current percentage and normal bar colors. Hidden views and static

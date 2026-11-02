@@ -67,6 +67,67 @@ test.each(["models", "accounts", "history"] as const)(
   },
 );
 
+test("Partial model discovery warns once while healthy candidates remain selectable", async () => {
+  // A cached partial catalog should open immediately without hiding healthy providers.
+  const app = await createTestRenderer({ width: 100, height: 24, clock: new ManualClock() });
+  const notices: { text: string; level: string | undefined }[] = [];
+  const selected: string[] = [];
+  const warning = "Could not refresh anthropic models. Check /accounts and refresh /model.";
+  const catalog: ModelCatalog = {
+    conversationId: "conversation",
+    current: null,
+    effort: "off",
+    warning,
+    models: [
+      {
+        provider: "healthy",
+        id: "model",
+        name: "Healthy model",
+        contextWindow: 1000,
+        images: false,
+        reasoning: false,
+        effort: "off",
+        efforts: ["off"],
+      },
+    ],
+  };
+  const picker = new ModelPicker(app.renderer, {
+    cached: () => ok(catalog),
+    select: async (_session, _conversation, model) => {
+      selected.push(model.provider);
+      return ok(null);
+    },
+    notice: (text, options) => {
+      notices.push({ text, level: options?.level });
+    },
+    changed() {},
+    fallback() {},
+    keyHint: () => "",
+  });
+  app.renderer.root.add(picker.root);
+  try {
+    // Background cache replays must not duplicate the actionable warning or insert a status row.
+    picker.show({ sessionId: "session", conversationId: "conversation" });
+    for (let update = 0; update < 3; update++) {
+      picker.updateData();
+      await app.renderOnce();
+    }
+    expect(notices).toEqual([{ text: warning, level: "warning" }]);
+    expect(app.captureCharFrame()).toContain("Healthy model");
+    expect(app.captureCharFrame()).not.toContain(warning);
+    expect(picker.search.field.title).toBe(" Models ");
+
+    // The warning does not prevent the explicit model-selection command from succeeding.
+    picker.command("model.select");
+    await app.renderOnce();
+    expect(selected).toEqual(["healthy"]);
+    expect(picker.visible).toBe(false);
+  } finally {
+    picker.dispose();
+    await app.dispose();
+  }
+});
+
 test("Model application keeps candidates visible with title-only activity and notifies rejected changes", async () => {
   // A prepared catalog opens without loading, and only the explicit model change remains pending.
   const clock = new ManualClock();

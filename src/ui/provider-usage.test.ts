@@ -129,6 +129,61 @@ test.each(["loading", "error"] as const)(
   },
 );
 
+test.each([false, true])(
+  "Claude authentication failures show auth instead of indefinite loading with cached usage: %s",
+  async (cached) => {
+    // A failed first lookup and a denied account with cached usage need the same actionable state.
+    const app = await mount();
+    try {
+      const values = quotas();
+      const previous = { ...values.anthropic!, windows: cached ? values.anthropic!.windows : [] };
+      const providers = ["openai-codex", "anthropic"];
+      app.footer.setUsage({ ...values, anthropic: { ...previous, status: "loading" } }, providers);
+      await app.renderOnce();
+      const spinner = app.renderer.root.findDescendantById("footer-usage-loading-anthropic")!;
+      expect(spinner.visible).toBe(true);
+
+      // Authentication rejection ends the pending animation immediately, even before its minimum duration.
+      app.footer.setUsage(
+        {
+          ...values,
+          anthropic: { ...previous, status: "error", errorCode: "USAGE_AUTH_REQUIRED" },
+        },
+        providers,
+      );
+      app.footer.setWorkspace({ name: "radian", branch: "main" });
+      app.footer.setContext("Extension status ".repeat(20));
+      for (const width of [140, 40, 30, 140]) {
+        app.resize(width, 4);
+        await app.renderOnce();
+
+        // The auth marker stays beside Claude without hiding another account or presenting stale quota.
+        expect(app.line()).toMatch(new RegExp(`${icons.claude}\\s+auth`, "u"));
+        expect(app.line()).toContain("18%");
+        expect(app.line()).not.toContain("64%");
+        expect(app.line()).not.toContain("5d 23h");
+        expect(spinner.visible).toBe(false);
+        expect(Bun.stringWidth(app.line())).toBeLessThanOrEqual(width);
+      }
+      app.clock.advance(1000);
+      await app.renderOnce();
+      expect(spinner.visible).toBe(false);
+
+      // Successful authentication restores the measured ratio without leaving an auth marker behind.
+      app.footer.setContext("");
+      app.footer.setWorkspace(null);
+      app.footer.setUsage(values, providers);
+      await app.renderOnce();
+      expect(app.line()).toContain("64% used 5d 23h");
+      expect(app.line()).toContain("18% used 1h 0m");
+      expect(app.line()).not.toContain("auth");
+      expect(spinner.visible).toBe(false);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
 test("Both quota ratios survive compact global status layouts and restore their countdowns", async () => {
   // The footer is shared by all work views, so width changes must not lose either provider's known usage.
   const app = await mount();

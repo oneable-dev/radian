@@ -62,7 +62,7 @@ import { completionLimit, expandSkillInvocation, type CompletionResult } from ".
 import { parseSessionControl } from "./session-controls.ts";
 import { parseHistoryCommand } from "./history-command.ts";
 import { parseDashboardCommand } from "./dashboard-command.ts";
-import type { AccountManager } from "../accounts/manager.ts";
+import type { AccountManager, ModelRefresh } from "../accounts/manager.ts";
 import { parseAccountsCommand } from "../accounts/model.ts";
 import { bindAccountSession } from "../accounts/session.ts";
 import { sessionResourceLoader } from "./resource-loader.ts";
@@ -630,7 +630,7 @@ export class PiSessionExecutor implements SessionExecutor {
     private readonly refreshAccountModels?: (
       signal?: AbortSignal,
       refresh?: boolean,
-    ) => Promise<Result<void, ExpectedError>>,
+    ) => Promise<Result<ModelRefresh, ExpectedError>>,
     private readonly ui?: ExtensionUiBridge,
     private readonly mcpAuth?: McpAuthPicker,
   ) {
@@ -790,9 +790,23 @@ export class PiSessionExecutor implements SessionExecutor {
       return refreshed;
     }
 
-    const loaded = await modelOperation(() =>
-      this.session.modelRuntime.getAvailable(undefined, signal ? { signal } : {}),
-    );
+    const unavailable = new Set(refreshed?.value.unavailableProviders ?? []);
+    const runtime = this.session.modelRuntime;
+    const options = signal ? { signal } : {};
+    const loaded = await modelOperation(async () => {
+      if (!unavailable.size) {
+        return runtime.getAvailable(undefined, options);
+      }
+
+      const catalogs = await Promise.all(
+        runtime
+          .getProviders()
+          .filter((provider) => !unavailable.has(provider.id))
+          .map((provider) => runtime.getAvailable(provider.id, options)),
+      );
+
+      return catalogs.flat();
+    });
     if (!loaded.ok) {
       return loaded;
     }
@@ -815,6 +829,11 @@ export class PiSessionExecutor implements SessionExecutor {
       conversationId: this.savedSessionId,
       current,
       effort,
+      ...(unavailable.size
+        ? {
+            warning: `Could not refresh models for ${[...unavailable].join(", ")}. Those providers were omitted from the list. Check /accounts and refresh /model to retry. Running conversations were not changed.`,
+          }
+        : {}),
       models: loaded.value.map((model) => ({
         provider: model.provider,
         id: model.id,
