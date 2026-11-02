@@ -565,13 +565,14 @@ test("Every attached TUI receives explicit deletion summaries and cannot save de
   }
 }, 40000);
 
-test("Shared daemon snapshots carry session state without transcripts that TUI streams deliver", async () => {
-  // Lifecycle probes read the shared snapshot; transcripts there made it grow with every conversation.
+test("Snapshots carry session state while event streams deliver only transcript changes", async () => {
+  // Lifecycle probes read snapshots; transcripts there grew with every conversation and change.
   const fixture = await createWorktreeFixture();
   const stateRoot = join(fixture.directory, "state");
   const config = join(fixture.directory, "settings.json");
   await writeFile(config, JSON.stringify({ workspace: { roots: [fixture.main], maxDepth: 0 } }));
   let workspace: WorkspaceClient | undefined;
+  let cancelEvents: (() => Promise<void>) | undefined;
   try {
     workspace = expectOk(
       await WorkspaceClient.attach(workspaceSource({ config, cwd: fixture.main }), {
@@ -583,29 +584,71 @@ test("Shared daemon snapshots carry session state without transcripts that TUI s
     const chatSession = expectOk(await workspace.create(CHAT_SCOPE_ID));
     expectOk(await workspace.prompt(repositorySession, "hello"));
     expectOk(await workspace.prompt(chatSession, "hello"));
-    await until(
-      () =>
-        workspace!.snapshot.details[repositorySession]?.status === "complete" &&
-        workspace!.snapshot.details[chatSession]?.status === "complete",
-    );
+    const completed = (id: string) => workspace!.snapshot.details[id]?.status === "complete";
+    await until(() => completed(repositorySession) && completed(chatSession));
 
-    // Shared session state remains available for stop warnings and CHAT command identity.
+    // Snapshots keep session state for stop warnings and command identity only.
+    const repositoryPaths = runtimePaths(fixture.repository.id, true, stateRoot);
     const shared = expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!;
-    for (const id of [repositorySession, chatSession]) {
-      expect(shared.details[id]?.status).toBe("complete");
-      expect(shared.details[id]?.conversationId).toBeTruthy();
-      expect(shared.details[id]).not.toHaveProperty("sections");
+    const repository = expectOk(await fetchSnapshot(repositoryPaths))!;
+    for (const [details, id] of [
+      [shared.details, repositorySession],
+      [shared.details, chatSession],
+      [shared.chat!.details, chatSession],
+      [repository.details, repositorySession],
+    ] as const) {
+      expect(details[id]?.status).toBe("complete");
+      expect(details[id]?.conversationId).toBeTruthy();
+      expect(details[id]).not.toHaveProperty("sections");
     }
 
-    // The TUI still renders repository transcripts from their own runtime and CHAT from its state.
-    const repository = expectOk(
-      await fetchSnapshot(runtimePaths(fixture.repository.id, true, stateRoot)),
-    )!;
-    expect(repository.details[repositorySession]?.sections?.length).toBeGreaterThan(0);
-    expect(shared.chat?.details[chatSession]?.sections?.length).toBeGreaterThan(0);
-    expect(workspace.snapshot.details[repositorySession]?.sections?.length).toBeGreaterThan(0);
+    // TUIs rebuild repository and CHAT transcripts from their event streams.
+    const delivered = workspace.snapshot.details[repositorySession]!.sections!;
+    expect(delivered.length).toBeGreaterThan(0);
     expect(workspace.snapshot.details[chatSession]?.sections?.length).toBeGreaterThan(0);
+
+    // A later run sends new sections without resending the ones this stream already delivered.
+    const response = await fetch("http://localhost/events?transcripts=1", {
+      unix: repositoryPaths.socket,
+    });
+    const events = response.body!.getReader();
+    cancelEvents = () => events.cancel();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const next = async (): Promise<RuntimeSnapshot> => {
+      while (!buffered.includes("\n")) {
+        const chunk = await events.read();
+        if (chunk.done) throw new Error("Event stream ended.");
+        buffered += decoder.decode(chunk.value, { stream: true });
+      }
+      const line = buffered.slice(0, buffered.indexOf("\n"));
+      buffered = buffered.slice(line.length + 1);
+      return JSON.parse(line) as RuntimeSnapshot;
+    };
+    const first = await next();
+    expect(first.details[repositorySession]).not.toHaveProperty("sections");
+    expect(first.transcripts?.[repositorySession]?.ids).toEqual(delivered.map((item) => item.id));
+
+    expectOk(await workspace.prompt(repositorySession, "again"));
+    const resent = new Set<string>();
+    let order = first.transcripts![repositorySession]!.ids!;
+    for (;;) {
+      const frame = await next();
+      const update = frame.transcripts?.[repositorySession];
+      for (const item of update?.sections ?? []) resent.add(item.id);
+      order = update?.ids ?? order;
+      if (
+        order.length > delivered.length &&
+        frame.details[repositorySession]?.status === "complete"
+      )
+        break;
+    }
+    expect(delivered.filter((item) => resent.has(item.id))).toEqual([]);
+    await until(
+      () => workspace!.snapshot.details[repositorySession]?.sections?.length === order.length,
+    );
   } finally {
+    await cancelEvents?.();
     await workspace?.disconnect();
     await stop(stateRoot);
     await fixture.cleanup();

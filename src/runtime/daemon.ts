@@ -1,6 +1,7 @@
 import { chmod, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { snapshotEvents } from "./events.ts";
+import { TranscriptFrames, transcriptStream, withoutSections } from "./transcript-frames.ts";
 import { ChatRuntime } from "./chat-runtime.ts";
 import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import { accountRequestSchema } from "../accounts/model.ts";
@@ -844,11 +845,10 @@ class SharedDaemon {
       ...(this.chat ? { chat: this.chat.snapshot } : {}),
       // TUIs receive repository transcripts from repository runtimes and CHAT transcripts from
       // `chat`. Shared details carry state only, so lifecycle probes stay small.
-      details: Object.fromEntries(
-        [...snapshots.map((snapshot) => snapshot.details), this.chat?.snapshot.details ?? {}]
-          .flatMap((details) => Object.entries(details))
-          .map(([id, { sections: _sections, ...state }]) => [id, state]),
-      ),
+      details: withoutSections({
+        ...Object.assign({}, ...snapshots.map((snapshot) => snapshot.details)),
+        ...this.chat?.snapshot.details,
+      }),
       preferences: structuredClone(emptyPreferences),
       closingCount:
         snapshots.reduce((total, snapshot) => total + snapshot.closingCount, 0) +
@@ -879,11 +879,29 @@ class SharedDaemon {
     try {
       const path = new URL(request.url).pathname;
       if (path === "/snapshot" && request.method === "GET") {
-        return Response.json(this.snapshot);
+        const snapshot = this.snapshot;
+        return Response.json(
+          snapshot.chat
+            ? {
+                ...snapshot,
+                chat: { ...snapshot.chat, details: withoutSections(snapshot.chat.details) },
+              }
+            : snapshot,
+        );
       }
       if (path === "/events" && request.method === "GET") {
+        const frames = transcriptStream(request) ? new TranscriptFrames() : undefined;
         return snapshotEvents(
-          () => this.snapshot,
+          () => {
+            const snapshot = this.snapshot;
+            if (!frames) return snapshot;
+            const { details, transcripts } = frames.split(snapshot.chat?.details ?? {});
+            return {
+              ...snapshot,
+              ...(snapshot.chat ? { chat: { ...snapshot.chat, details } } : {}),
+              transcripts,
+            };
+          },
           (listener) => {
             this.listeners.add(listener);
             this.accounts?.setActive(true, this.instance);

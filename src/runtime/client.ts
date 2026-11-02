@@ -50,6 +50,7 @@ import {
 } from "./completion-protocol.ts";
 import type { CompletionCatalog, CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
+import { TranscriptStore } from "./transcript-frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
 import { parseHistoryCommand } from "../agents/history-command.ts";
 import { parseDashboardCommand } from "../agents/dashboard-command.ts";
@@ -87,6 +88,7 @@ export class RuntimeClient {
   private readonly listeners = new Set<() => void>();
   private readonly hidden = new Set<string>();
   private readonly hiddenTerminals = new Set<string>();
+  private readonly transcripts = new TranscriptStore();
   private readonly streamAbort = new AbortController();
   private streamTask: Promise<void> | undefined;
   private attachment: Promise<Result<void, ExpectedError>> | undefined;
@@ -326,7 +328,8 @@ export class RuntimeClient {
       streamHandshakeMs,
     );
     try {
-      const response = await transport(this.paths, "/events", { signal });
+      // Transcripts arrive as changes; services that predate them ignore the query.
+      const response = await transport(this.paths, "/events?transcripts=1", { signal });
       if (!response.ok) {
         return response;
       }
@@ -2071,7 +2074,17 @@ export class RuntimeClient {
               "Runtime restarted; state restored. Interrupted actions were not replayed.";
           }
 
-          this.state = parsed.value;
+          if (parsed.value.transcripts) {
+            // The first frame of each stream carries every transcript in full.
+            const applied = this.transcripts.apply(parsed.value.transcripts, firstFrame);
+            if (!applied.ok) {
+              return applied;
+            }
+          }
+
+          this.state = parsed.value.transcripts
+            ? this.transcripts.merge(parsed.value)
+            : parsed.value;
           this.failure = "";
 
           const open = new Set(

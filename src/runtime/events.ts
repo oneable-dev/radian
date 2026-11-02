@@ -1,20 +1,22 @@
 // Full snapshots can replace one another; output chunks and user commands cannot.
+// Frames are built only when the stream accepts them, so a backlogged client receives the latest
+// state once and `current` can track exactly what each stream has delivered.
 export function snapshotEvents<T>(
   current: () => T,
   subscribe: (send: () => void) => () => void,
 ): Response {
-  let pending: Uint8Array | undefined;
+  let pending = false;
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const encoder = new TextEncoder();
+  const frame = () => encoder.encode(JSON.stringify(current()) + "\n");
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = () => {
-        const data = encoder.encode(JSON.stringify(current()) + "\n");
         if ((controller.desiredSize ?? 0) > 0) {
-          controller.enqueue(data);
+          controller.enqueue(frame());
         } else {
-          pending = data;
+          pending = true;
         }
       };
       unsubscribe = subscribe(send);
@@ -25,8 +27,8 @@ export function snapshotEvents<T>(
     },
     pull(controller) {
       if (pending) {
-        controller.enqueue(pending);
-        pending = undefined;
+        pending = false;
+        controller.enqueue(frame());
       }
     },
     cancel() {
@@ -35,7 +37,7 @@ export function snapshotEvents<T>(
       }
 
       unsubscribe?.();
-      pending = undefined;
+      pending = false;
     },
   });
 

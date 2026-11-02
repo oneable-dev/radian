@@ -45,6 +45,7 @@ import { accountRequestSchema } from "../accounts/model.ts";
 import { EditorSessions } from "../editor/sessions.ts";
 import { TerminalSessions } from "../terminal/sessions.ts";
 import { snapshotEvents } from "./events.ts";
+import { TranscriptFrames, transcriptStream, withoutSections } from "./transcript-frames.ts";
 import { transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 import {
   emptyPreferences,
@@ -668,10 +669,11 @@ export class WorkspaceRuntime {
         );
       }
       if (path === "/snapshot" && request.method === "GET") {
-        return Response.json(this.snapshot);
+        const snapshot = this.snapshot;
+        return Response.json({ ...snapshot, details: withoutSections(snapshot.details) });
       }
       if (path === "/events" && request.method === "GET") {
-        return this.events();
+        return this.events(transcriptStream(request));
       }
       if ((path === "/editor/events" || path === "/terminal/events") && request.method === "GET") {
         const params = new URL(request.url).searchParams;
@@ -1341,9 +1343,13 @@ export class WorkspaceRuntime {
     return result.ok ? ok(null) : result;
   }
 
-  private events(): Response {
+  private events(transcripts: boolean): Response {
+    const frames = transcripts ? new TranscriptFrames() : undefined;
     return snapshotEvents(
-      () => this.snapshot,
+      () => {
+        const snapshot = this.snapshot;
+        return frames ? { ...snapshot, ...frames.split(snapshot.details) } : snapshot;
+      },
       (send) => {
         this.subscribers.add(send);
         this.setObserved(true);

@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { ExecutionState, SessionRecord } from "../agents/session-registry.ts";
+import type { TranscriptSection } from "../agents/transcript.ts";
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
 import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
@@ -300,6 +301,18 @@ export const emptyPreferences: RuntimePreferences = {
   selection: { worktreeId: null, sessions: {} },
   drafts: {},
 };
+// One session's transcript changes since the previous frame of the same event stream.
+// `ids` lists the complete section order whenever sections were added, removed or reordered.
+const transcriptUpdateSchema = Type.Object({
+  ids: Type.Optional(Type.Array(id)),
+  sections: Type.Array(transcriptSection),
+});
+
+export type TranscriptUpdate = {
+  readonly ids?: readonly string[];
+  readonly sections: readonly TranscriptSection[];
+};
+
 export const chatCollectionSchema = Type.Object({
   id: Type.Literal(CHAT_SCOPE_ID),
   path: id,
@@ -359,6 +372,9 @@ export const snapshotSchema = Type.Object({
   // They keep existing resources and records but accept no new work.
   unavailableRepositories: Type.Optional(Type.Array(id)),
   details: Type.Record(Type.String(), execution),
+  // Event streams requested with `?transcripts=1`: session details omit `sections`, which
+  // arrive here as changes. The first frame of a stream carries every transcript in full.
+  transcripts: Type.Optional(Type.Record(Type.String(), transcriptUpdateSchema)),
   closingCount: Type.Integer({ minimum: 0 }),
   preferences: preferencesSchema,
   notice: Type.String(),
@@ -380,11 +396,12 @@ export const snapshotSchema = Type.Object({
 
 export type RuntimeSnapshot = Omit<
   Static<typeof snapshotSchema>,
-  "repositories" | "details" | "chat"
+  "repositories" | "details" | "chat" | "transcripts"
 > & {
   readonly repositories: readonly Repository[];
   readonly details: Readonly<Record<string, ExecutionState>>;
   readonly chat?: ChatCollection;
+  readonly transcripts?: Readonly<Record<string, TranscriptUpdate>>;
 };
 
 export const chatSessionRecordSchema = Type.Object({

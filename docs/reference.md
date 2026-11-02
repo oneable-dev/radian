@@ -847,10 +847,13 @@ Only navigation state is stored in the additive `agentViews` preference; it surv
 sessions/views and reconnecting to the same live runtime. Stable live section IDs do not promise
 restoration of temporary selections after a service restart. Full transcript text is not limited to
 the legacy 12-message/12,000-character preview. Aggregate workspace snapshots have a **64 MiB receive
-limit**, separate from the 8 MiB command/PTY limits; transcript paging is not implemented. The
-shared daemon snapshot, which lifecycle checks and `runtime status` read, carries session state
-without transcript sections; TUIs receive repository transcripts from repository runtimes and CHAT
-transcripts from its `chat` state. Older
+limit**, separate from the 8 MiB command/PTY limits; transcript paging is not implemented.
+Snapshots, which lifecycle checks, connection and `runtime status` read, carry session state
+without transcript sections. TUIs request event streams with transcript changes: the first frame
+of each stream carries every transcript, and later frames carry only new or changed sections, so
+streaming output no longer resends whole conversations. Repository transcripts come from
+repository runtimes and CHAT transcripts from the shared daemon. Older TUIs keep receiving full
+session details. Older
 services remain usable with their legacy output in a generic Transcript section. Finish their jobs
 and explicitly stop/restart them to load the new capability; no service
 is automatically restarted.
