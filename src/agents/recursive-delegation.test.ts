@@ -549,46 +549,64 @@ test.each(["close", "interrupt", "clear", "shutdown"])(
   },
 );
 
-test("Planning children never receive coordination even with delegation metadata", async () => {
-  const app = await setup();
-  try {
-    expectOk(
-      await app.root.context.coordinateSubagents!(
-        { action: "spawn", agent: "lead", task: "plan" },
-        undefined,
-        "planning",
-        lead,
-      ),
-    );
-    const planner = await app.byTask("plan");
-
-    expect(planner.context.purpose).toBe("planning");
-    expect(planner.context.coordinateSubagents).toBeUndefined();
-    // Ordinary delegators cannot forge a planning purpose for their own children.
-    expectOk(await app.spawn(app.root.context, lead, "lead"));
-    const leadRun = await app.byTask("lead");
-    expect(
-      expectError(
-        await leadRun.context.coordinateSubagents!(
-          { action: "spawn", agent: "worker", task: "forged" },
+test.each(["planning", "analysis"] as const)(
+  "Q03 %s purpose propagates through lead to lead to worker",
+  async (purpose) => {
+    const app = await setup();
+    try {
+      expectOk(
+        await app.root.context.coordinateSubagents!(
+          { action: "spawn", agent: "lead", task: "plan" },
           undefined,
-          "planning",
-          worker,
+          purpose,
+          lead,
         ),
-      ).code,
-    ).toBe("UNSUPPORTED_CAPABILITY");
-    expect(
-      expectError(
-        await leadRun.context.contactSupervisor!({
-          action: "proposal",
-          proposal: {} as never,
-        }),
-      ).code,
-    ).toBe("UNSUPPORTED_CAPABILITY");
-  } finally {
-    await app.cleanup();
-  }
-});
+      );
+      const planner = await app.byTask("plan");
+
+      // Read-only delegation is transitive and retains the ordinary depth boundary.
+      expect(planner.context.purpose).toBe(purpose);
+      expect(planner.context.coordinateSubagents).toBeFunction();
+      expectOk(await app.spawn(planner.context, lead, "nested-plan"));
+      const nested = await app.byTask("nested-plan");
+      expectOk(await app.spawn(nested.context, worker, "nested-worker"));
+      const nestedWorker = await app.byTask("nested-worker");
+      expect([nested.context.purpose, nestedWorker.context.purpose]).toEqual([purpose, purpose]);
+      expect(nestedWorker.context.coordinateSubagents).toBeUndefined();
+      expectOk(await app.spawn(nested.context, lead, "depth-lead"));
+      const depthLead = await app.byTask("depth-lead");
+      expect(expectError(await app.spawn(depthLead.context, worker, "too-deep")).code).toBe(
+        "DELEGATION_DEPTH_EXCEEDED",
+      );
+      // Ordinary delegators cannot forge a planning purpose for their own children.
+      expectOk(await app.spawn(app.root.context, lead, "lead"));
+      const leadRun = await app.byTask("lead");
+      expect(expectError(await app.spawn(app.root.context, worker, "capacity-overflow")).code).toBe(
+        "DELEGATION_CAPACITY_EXCEEDED",
+      );
+      expect(
+        expectError(
+          await leadRun.context.coordinateSubagents!(
+            { action: "spawn", agent: "worker", task: "forged" },
+            undefined,
+            "planning",
+            worker,
+          ),
+        ).code,
+      ).toBe("UNSUPPORTED_CAPABILITY");
+      expect(
+        expectError(
+          await leadRun.context.contactSupervisor!({
+            action: "proposal",
+            proposal: {} as never,
+          }),
+        ).code,
+      ).toBe("UNSUPPORTED_CAPABILITY");
+    } finally {
+      await app.cleanup();
+    }
+  },
+);
 
 test("Nested records persist ancestry and legacy records restore as root children", async () => {
   const app = await setup();

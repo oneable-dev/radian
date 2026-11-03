@@ -1,5 +1,5 @@
 import { pressLeader } from "../../testing/keys.ts";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { ExecutionState } from "../../agents/session-registry.ts";
@@ -11,9 +11,12 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import { submitAgentPrompt } from "../agent-prompt.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench } from "./workbench.ts";
+import type { CompletionProvider } from "../../agents/ui/completion-menu.ts";
 
 async function mount(
   creation: Promise<Result<string, ExpectedError>> = Promise.resolve(ok("created")),
+  promptResult: Result<void, ExpectedError> = ok(undefined),
+  onComplete?: CompletionProvider,
 ) {
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true });
   let repositories = demoWorkspace();
@@ -104,7 +107,7 @@ async function mount(
         selection.replaceSnapshot(repositories);
       }
 
-      return ok(undefined);
+      return promptResult;
     },
   };
   const view = new Workbench(app.renderer, selection, {
@@ -113,6 +116,7 @@ async function mount(
     initialDrafts: { a2: "Second draft", b1: "Feature draft" },
     getSessionDetails: (id) => details[id] ?? null,
     onPrompt: (id, text, images) => submitAgentPrompt(client, selection, id, text, images),
+    ...(onComplete ? { onComplete } : {}),
   });
   const render = async () => {
     for (let index = 0; index < 12; index++) {
@@ -153,6 +157,75 @@ async function mount(
     },
   };
 }
+
+test("Q12 repair errors retain the draft and reading position with a coded notice", async () => {
+  // The reader is inspecting older transcript content when a host command is rejected.
+  const app = await mount(undefined, err(new InputError("Repair request rejected")));
+  const notice = spyOn(app.view, "notify");
+  try {
+    app.scroll.scrollTo(10);
+    await app.render();
+    const top = app.scroll.scrollTop;
+
+    await app.submit("/repair recheck task-1");
+
+    // No extra result surface or follow-latest jump is needed for a host repair command.
+    expect(app.sent).toEqual(["/repair recheck task-1"]);
+    expect(app.input.value).toBe("/repair recheck task-1");
+    expect(app.scroll.scrollTop).toBe(top);
+    expect(notice).toHaveBeenCalledWith(
+      "[INVALID_INPUT] Repair request rejected · prompt retained",
+      expect.objectContaining({ level: "error" }),
+    );
+  } finally {
+    notice.mockRestore();
+    await app.close();
+  }
+});
+
+test("Q12 invalid repair arguments remain in the input without reaching the client", async () => {
+  // Parsing failures belong to the typed input, not an SDK slash-command handler.
+  const app = await mount();
+  try {
+    await app.submit("/repair cancel");
+
+    expect(app.sent).toEqual([]);
+    expect(app.input.value).toBe("/repair cancel");
+    expect(app.captureCharFrame()).toContain("[INVALID_INPUT]");
+    expect(app.view.promptDrafts.a1).toBe("/repair cancel");
+  } finally {
+    await app.close();
+  }
+});
+
+test.each(["command", "template"] as const)(
+  "Q12 a %s completion named repair cannot replace reserved typed input",
+  async (kind) => {
+    // A conflicting extension/template is present in the visible completion source.
+    const items = [{ kind, value: "repair", description: "Conflicting user resource" }];
+    const provider: CompletionProvider = Object.assign(
+      async () => ok({ items, truncated: false }),
+      {
+        read: () => ok({ items, truncated: false }),
+      },
+    );
+    const app = await mount(undefined, undefined, provider);
+    try {
+      app.scroll.scrollTo(10);
+      await app.render();
+      const top = app.scroll.scrollTop;
+
+      await app.submit("/repair");
+
+      // Enter preserves the exact host command and does not force transcript follow-latest.
+      expect(app.sent).toEqual(["/repair"]);
+      expect(app.input.value).toBe("");
+      expect(app.scroll.scrollTop).toBe(top);
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test("new selects new tabs while preserving existing conversation, runs, reading positions, and selection", async () => {
   const app = await mount();

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { requestSummarySchema } from "./request-summary.ts";
+import { workflowBindingSchema } from "./task-workflow.ts";
 
 // Coordination records are separate from transient UI rows and never restore live handles.
 export const ownedSubagentRecordSchema = Type.Object({
@@ -16,6 +17,8 @@ export const ownedSubagentRecordSchema = Type.Object({
     Type.Null(),
   ]),
   task: Type.Optional(Type.String()),
+  binding: Type.Optional(workflowBindingSchema),
+  purpose: Type.Optional(Type.Enum(["planning", "analysis"])),
   output: Type.String(),
   finalOutput: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),

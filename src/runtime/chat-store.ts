@@ -5,6 +5,13 @@ import { isAbsolute, join, relative } from "node:path";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { SessionRecord } from "../agents/session-registry.ts";
+import {
+  deleteWorkflowForRetention,
+  inspectWorkflowForRetention,
+  inspectedWorkflowSchema,
+  recheckWorkflowForRetention,
+  workflowFilePath,
+} from "../agents/task-workflow-store.ts";
 import { sessionRecordKey } from "../agents/session-snapshot.ts";
 import {
   inspectTaskPlanForRetention,
@@ -42,6 +49,7 @@ const indexSchema = Type.Object({
   updatedAt: Type.Integer({ minimum: 0 }),
   closedAt: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   cleanupPending: Type.Optional(Type.Boolean()),
+  cleanupWorkflow: Type.Optional(inspectedWorkflowSchema),
 });
 const indexManifestSchema = Type.Object({
   version: Type.Literal(2),
@@ -65,6 +73,7 @@ const digest = (record: SessionRecord) =>
 // CHAT owns its own indexed snapshots. Closed transcripts are never loaded on startup or
 // rewritten at each streaming checkpoint; the index is enough for History summaries.
 export class ChatStore {
+  readonly retentionWarnings: string[] = [];
   private entries = new Map<string, ChatIndex>();
   private legacy = new Map<string, SessionRecord>();
   private tombstones = new Set<string>();
@@ -299,6 +308,7 @@ export class ChatStore {
     reserve: (entry: ChatIndex, canonicalFile?: string) => (() => void) | null = () => () => {},
   ): Promise<Result<number, ExpectedError>> {
     const task = this.writing.then(async () => {
+      this.retentionWarnings.length = 0;
       const expired = [...this.entries.values()].filter(
         (entry) => entry.cleanupPending || sessionExpired(entry, days, Date.now()),
       );
@@ -341,6 +351,36 @@ export class ChatStore {
           failures.push(plan.error);
           continue;
         }
+        const workflow = entry.sessionFile
+          ? await inspectWorkflowForRetention(entry.sessionFile, owner)
+          : ok({ kind: "absent" as const });
+        if (!workflow.ok) {
+          failures.push(workflow.error);
+          continue;
+        }
+        if (
+          !entry.cleanupPending &&
+          workflow.value.kind === "ready" &&
+          (workflow.value.updatedAt > entry.updatedAt ||
+            Math.floor(workflow.value.fingerprint.mtimeMs) > entry.updatedAt)
+        )
+          continue;
+        const expectedWorkflow = entry.cleanupWorkflow ?? { kind: "absent" as const };
+        const workflowAlreadyRemoved =
+          entry.cleanupPending &&
+          inspected.value.kind === "absent" &&
+          workflow.value.kind === "absent" &&
+          expectedWorkflow.kind === "ready";
+        if (
+          entry.cleanupPending &&
+          !workflowAlreadyRemoved &&
+          JSON.stringify(workflow.value) !== JSON.stringify(expectedWorkflow)
+        ) {
+          failures.push(
+            new StorageError("CHAT workflow changed during interrupted retention cleanup."),
+          );
+          continue;
+        }
         if (
           plan.value.kind === "ready" &&
           plan.value.updatedAt > entry.updatedAt &&
@@ -355,7 +395,11 @@ export class ChatStore {
         try {
           if (!entry.cleanupPending) {
             const marked = new Map(this.entries);
-            marked.set(entry.key, { ...entry, cleanupPending: true });
+            marked.set(entry.key, {
+              ...entry,
+              cleanupPending: true,
+              cleanupWorkflow: workflow.value,
+            });
             const published = await this.publish(marked);
             if (!published.ok) {
               failures.push(published.error);
@@ -364,7 +408,14 @@ export class ChatStore {
             this.entries = marked;
           }
           if (entry.sessionFile) {
-            const checked = await recheckTaskPlanForRetention(entry.sessionFile, owner, plan.value);
+            const planCheck = await recheckTaskPlanForRetention(
+              entry.sessionFile,
+              owner,
+              plan.value,
+            );
+            const checked = planCheck.ok
+              ? await recheckWorkflowForRetention(entry.sessionFile, owner, workflow.value)
+              : planCheck;
             if (!checked.ok) {
               if (!entry.cleanupPending) {
                 const restored = new Map(this.entries);
@@ -395,6 +446,19 @@ export class ChatStore {
               failures.push(sidecar.error);
               continue;
             }
+            const removedWorkflow = await deleteWorkflowForRetention(
+              entry.sessionFile,
+              owner,
+              workflow.value,
+            );
+            if (!removedWorkflow.ok) {
+              failures.push(removedWorkflow.error);
+              continue;
+            }
+            if (removedWorkflow.value === "retained")
+              this.retentionWarnings.push(
+                `Retained workflow ${workflowFilePath(entry.sessionFile)}: a live continuation still references it.`,
+              );
           }
           const body = await capture(() => rm(this.snapshotPath(entry.key), { force: true }));
           if (!body.ok) {

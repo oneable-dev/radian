@@ -26,6 +26,11 @@ export const errorCodes = [
   "MODEL_UNAVAILABLE",
   "RESOURCE_UNAVAILABLE",
   "STORAGE_FAILED",
+  "WORKFLOW_NOT_AUTHORIZED",
+  "WORKFLOW_STALE",
+  "WORKFLOW_REPAIR_LOCKED",
+  "WORKFLOW_NOT_FOUND",
+  "WORKFLOW_CONFLICT",
   "RUNTIME_ABSENT",
   "CONNECTION_FAILED",
   "CONNECTION_TIMEOUT",
@@ -154,6 +159,19 @@ export class HistoryError extends ExpectedError<"HISTORY_UNAVAILABLE" | "HISTORY
 export class ResourceError extends ExpectedError<"RESOURCE_UNAVAILABLE"> {
   constructor(message: string, options?: ErrorOptions) {
     super("RESOURCE_UNAVAILABLE", message, options);
+  }
+}
+
+export type WorkflowErrorCode =
+  | "WORKFLOW_NOT_AUTHORIZED"
+  | "WORKFLOW_STALE"
+  | "WORKFLOW_REPAIR_LOCKED"
+  | "WORKFLOW_NOT_FOUND"
+  | "WORKFLOW_CONFLICT";
+
+export class WorkflowError extends ExpectedError<WorkflowErrorCode> {
+  constructor(code: WorkflowErrorCode, message: string, options?: ErrorOptions) {
+    super(code, message, options);
   }
 }
 

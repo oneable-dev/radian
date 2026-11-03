@@ -110,3 +110,32 @@ test("New progress replaces old progress and teardown drops the remaining inbox"
   expect(events).toEqual([expect.objectContaining({ message: "Report 99" })]);
   expect(inbox.size).toBe(0);
 });
+
+test("Q10 Workflow delivery is acknowledged only after SDK acceptance", () => {
+  // Taking a busy recipient's inbox is not proof that the SDK accepted its notice.
+  const inbox = new SubagentNotifications();
+  const acknowledgements: boolean[] = [];
+  inbox.add(
+    {
+      id: "workflow",
+      agent: "host",
+      type: "workflow",
+      eventKey: "qa:1",
+      taskIds: ["task"],
+      message: "QA failed",
+    },
+    () => true,
+    (accepted = true) => acknowledgements.push(accepted),
+  );
+
+  const events = inbox.take();
+  expect(acknowledgements).toEqual([]);
+  inbox.settle(events, false);
+  inbox.settle(events, true);
+
+  // An uncertain SDK failure releases delivery for a later state-derived retry once.
+  expect(acknowledgements).toEqual([false]);
+  expect(subagentNotificationText(events)).toContain(
+    "grants no steer, stop, spawn or human approval rights",
+  );
+});

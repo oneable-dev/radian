@@ -543,6 +543,26 @@ const inputBytes = Type.String({
   pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
 });
 
+const repairCommandSchema = Type.Union([
+  Type.Object(
+    { kind: Type.Literal("status"), id: Type.Optional(id) },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { kind: Type.Union([Type.Literal("recheck"), Type.Literal("cancel")]), id },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("continue"),
+      workflowId: Type.String({
+        pattern: "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$",
+      }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("terminal-create"), worktreeId: id, ...size }),
   Type.Object({ type: Type.Literal("terminal-close"), terminalId: id }),
@@ -589,6 +609,15 @@ export const commandSchema = Type.Union([
     model: modelIdentitySchema,
     effort: Type.Optional(modelEffortSchema),
   }),
+  Type.Object(
+    {
+      type: Type.Literal("task-workflow"),
+      sessionId: id,
+      conversationId: id,
+      command: repairCommandSchema,
+    },
+    { additionalProperties: false },
+  ),
   Type.Object({
     type: Type.Literal("prompt"),
     sessionId: id,
@@ -664,6 +693,7 @@ export function errorStatus(error: ExpectedError): number {
       return 400;
     case "ACCOUNT_NOT_FOUND":
     case "SESSION_NOT_OPEN":
+    case "WORKFLOW_NOT_FOUND":
     case "HISTORY_UNAVAILABLE":
     case "EDITOR_NOT_OPEN":
     case "PTY_NOT_OPEN":
@@ -672,6 +702,9 @@ export function errorStatus(error: ExpectedError): number {
     case "ACCOUNT_CONFLICT":
     case "SESSION_BUSY":
     case "SESSION_CONFLICT":
+    case "WORKFLOW_STALE":
+    case "WORKFLOW_REPAIR_LOCKED":
+    case "WORKFLOW_CONFLICT":
     case "CANCELLED":
     case "EDITOR_BUSY":
     case "PTY_BUSY":
@@ -684,6 +717,7 @@ export function errorStatus(error: ExpectedError): number {
     case "ACCOUNT_LOGIN_FAILED":
     case "BROWSER_UNAVAILABLE":
     case "UNSUPPORTED_CAPABILITY":
+    case "WORKFLOW_NOT_AUTHORIZED":
     case "MODEL_UNAVAILABLE":
     case "PROTOCOL_ERROR":
     case "EDITOR_UNAVAILABLE":

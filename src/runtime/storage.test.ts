@@ -1,5 +1,15 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createWorkflowDocument } from "../agents/task-workflow.ts";
+import {
+  mutateWorkflow,
+  workflowFilePath,
+  workflowLinkFilePath,
+  writeWorkflowLink,
+} from "../agents/task-workflow-store.ts";
+import { addContinuationMember } from "../agents/verification-policy.ts";
+import { userCommandProvenance } from "../agents/repair-command.ts";
+import { ok } from "../result.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Value } from "typebox/value";
@@ -10,7 +20,14 @@ import {
   protocolVersion,
   type RuntimeManifest,
 } from "./protocol.ts";
-import { daemonPaths, privateDirectory, runtimePaths, RuntimeStore } from "./storage.ts";
+import {
+  daemonPaths,
+  fenceRuntimeScope,
+  privateDirectory,
+  purgeRuntimeScope,
+  runtimePaths,
+  RuntimeStore,
+} from "./storage.ts";
 import { RuntimeClient } from "./client.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 
@@ -122,3 +139,75 @@ test("Legacy services report missing History support without automatic terminati
   expect(client.snapshot.instance).toBe("legacy");
   await client.disconnect();
 });
+
+test.each([false, true])(
+  "Q17 repository purge treats live continuation retention=%s as preservation, not failure",
+  async (live) => {
+    // A whole-repository purge must not reinterpret an intentionally retained workflow as unknown debris.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "radian-workflow-purge-")));
+    try {
+      const cwd = join(root, "repo");
+      await mkdir(cwd);
+      const repositoryId = join(cwd, ".git");
+      const paths = runtimePaths(repositoryId, true, join(root, "state"));
+      await privateDirectory(paths.directory);
+      const sdk = join(paths.directory, "sdk-sessions");
+      await privateDirectory(sdk);
+      const sessionFile = join(sdk, "origin.jsonl");
+      const owner = { conversationId: "origin", cwd };
+      await writeFile(sessionFile, JSON.stringify({ type: "session", id: "origin", cwd }) + "\n");
+      const doc = createWorkflowDocument({ ...owner, sessionFile }, crypto.randomUUID(), 0);
+      const location = { originSessionFile: sessionFile };
+      expectOk(
+        await mutateWorkflow(location, owner, () =>
+          ok({ doc, effects: [], outcome: { kind: "applied" } }),
+        ),
+      );
+      if (live) {
+        const nextFile = join(root, "next.jsonl");
+        const nextOwner = { conversationId: "next", cwd };
+        await writeFile(nextFile, JSON.stringify({ type: "session", id: "next", cwd }) + "\n");
+        expectOk(
+          await mutateWorkflow(location, owner, (current) =>
+            addContinuationMember(current!, {
+              eventKey: "continue",
+              at: 1000,
+              provenance: userCommandProvenance(nextOwner.conversationId, 1000),
+              member: { ...nextOwner, sessionFile: nextFile },
+            }),
+          ),
+        );
+        expectOk(await writeWorkflowLink(nextFile, nextOwner, location, owner));
+      }
+      expectOk(
+        await fenceRuntimeScope(paths, repositoryId, {
+          token: "workflow-purge",
+          repositoryId,
+          kind: "repository",
+          worktrees: [],
+          sessionIds: [],
+          revision: 1,
+          state: "fenced",
+          updatedAt: 1,
+        }),
+      );
+
+      const report = expectOk(
+        await purgeRuntimeScope(paths, repositoryId, "workflow-purge", { writersStopped: true }),
+      );
+
+      expect(report.complete).toBe(true);
+      expect(report.residuals).toEqual([]);
+      expect(await Bun.file(sessionFile).exists()).toBe(false);
+      expect(await Bun.file(workflowFilePath(sessionFile)).exists()).toBe(live);
+      if (live) {
+        expect(report.preserved.some((item) => item.path === workflowFilePath(sessionFile))).toBe(
+          true,
+        );
+        expect(await Bun.file(workflowLinkFilePath(join(root, "next.jsonl"))).exists()).toBe(true);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

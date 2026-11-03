@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -12,6 +12,202 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expectOk, expectError } from "../testing/results.ts";
 import { initialGitState } from "../git/model.ts";
 import { transcriptText } from "../testing/transcript-text.ts";
+import { SessionRegistry } from "../agents/session-registry.ts";
+import { openRepositoryRuntime } from "./service.ts";
+import { ok } from "../result.ts";
+import type { RuntimeCommand } from "./protocol.ts";
+
+async function repairHost() {
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const paths = runtimePaths(fixture.repository.id, true, stateRoot);
+  const resources = join(paths.directory, "offline-agent");
+  await mkdir(join(resources, "extensions"), { recursive: true });
+  await mkdir(join(resources, "prompts"), { recursive: true });
+  await writeFile(join(resources, "prompts", "repair.md"), "Never expand this repair template.");
+  await writeFile(
+    join(resources, "extensions", "repair.ts"),
+    `export default function(pi) {
+      pi.registerCommand("repair", { handler: async () => { throw new Error("Shadowed host repair"); } });
+      pi.registerCommand("emit-repair", { handler: async () => {
+        pi.sendMessage({ customType: "repair-probe", content: "/repair recheck x", display: true }, { triggerTurn: false });
+      } });
+    }`,
+  );
+  const runtime = expectOk(
+    await openRepositoryRuntime(fixture.repository.id, true, crypto.randomUUID(), stateRoot),
+  );
+  const server = Bun.serve({ unix: paths.socket, fetch: (request) => runtime.fetch(request) });
+  const request = (command: RuntimeCommand) =>
+    runtime.fetch(
+      new Request("http://localhost/command", {
+        method: "POST",
+        headers: { "X-Radian-Instance": runtime.instance },
+        body: JSON.stringify(command),
+      }),
+    );
+  const response = await request({
+    type: "create",
+    worktreeId: fixture.repository.worktrees[0]!.id,
+  });
+  const body: unknown = await response.json();
+  if (!Value.Check(replySchema, body) || !body.ok || !body.value) {
+    await server.stop(true);
+    await runtime.stop();
+    await fixture.cleanup();
+    throw new Error("Missing repair fixture session");
+  }
+  const sessionId = body.value;
+  const conversationId = runtime.snapshot.details[sessionId]!.conversationId!;
+  const client = new RuntimeClient(paths, runtime.snapshot);
+
+  return {
+    ...fixture,
+    runtime,
+    client,
+    sessionId,
+    conversationId,
+    request,
+    async cleanup() {
+      await client.disconnect();
+      await server.stop(true);
+      expectOk(await runtime.stop());
+      await fixture.cleanup();
+    },
+  };
+}
+
+test("Q12 typed repair commands cross client wire admission without extension/template shadowing", async () => {
+  // The registry boundary records host operations; conflicting SDK resources are loaded normally.
+  const repair = spyOn(SessionRegistry.prototype, "repair").mockResolvedValue(ok("Repair status"));
+  const prompt = spyOn(SessionRegistry.prototype, "prompt").mockResolvedValue(ok(undefined));
+  const app = await repairHost();
+  try {
+    const started = Date.now();
+    const workflowId = "12345678-1234-1234-1234-123456789abc";
+    const cases = [
+      ["/repair", { kind: "status" }],
+      ["/repair status task-1", { kind: "status", id: "task-1" }],
+      ["/repair recheck defect-1", { kind: "recheck", id: "defect-1" }],
+      ["/repair cancel task-1", { kind: "cancel", id: "task-1" }],
+      [`/repair continue ${workflowId}`, { kind: "continue", workflowId }],
+    ] as const;
+
+    for (const [text] of cases) expectOk(await app.client.prompt(app.sessionId, text));
+
+    // Only the host creates provenance, after validating the current conversation identity.
+    expect(app.runtime.snapshot.capabilities).toContain("task-repair");
+    expect(repair).toHaveBeenCalledTimes(cases.length);
+    for (const [index, [, command]] of cases.entries()) {
+      const call = repair.mock.calls[index]!;
+      expect(call.slice(0, 3)).toEqual([app.sessionId, app.conversationId, command]);
+      expect(call[3]).toMatchObject({ kind: "user-command", conversationId: app.conversationId });
+      expect(call[3].receivedAt).toBeGreaterThanOrEqual(started);
+      expect(call[3].receivedAt).toBeLessThanOrEqual(Date.now());
+    }
+    expect(prompt).not.toHaveBeenCalled();
+    const catalog = expectOk(await app.client.catalog(app.sessionId));
+    expect(catalog.items.filter((item) => item.value === "repair")).toEqual([
+      expect.objectContaining({ kind: "command", value: "repair" }),
+    ]);
+  } finally {
+    repair.mockRestore();
+    prompt.mockRestore();
+    await app.cleanup();
+  }
+});
+
+test("Q12 legacy repair prompt admission rejects stale sessions, attachments and invalid arguments", async () => {
+  // Old UI clients still submit genuine user text, but must identify its conversation.
+  const repair = spyOn(SessionRegistry.prototype, "repair").mockResolvedValue(ok("Repair status"));
+  const prompt = spyOn(SessionRegistry.prototype, "prompt").mockResolvedValue(ok(undefined));
+  const app = await repairHost();
+  try {
+    const base = {
+      type: "prompt",
+      sessionId: app.sessionId,
+      conversationId: app.conversationId,
+      text: "/repair status",
+    } as const;
+
+    const accepted = await app.request(base);
+    expect(accepted.status).toBe(200);
+    for (const [command, code] of [
+      [{ ...base, text: "/repair recheck" }, "INVALID_INPUT"],
+      [{ ...base, images: ["/image.png"] }, "INVALID_INPUT"],
+      [{ ...base, conversationId: "stale" }, "SESSION_CONFLICT"],
+      [{ type: "prompt", sessionId: app.sessionId, text: base.text }, "SESSION_CONFLICT"],
+      [{ ...base, sessionId: "closed" }, "SESSION_NOT_OPEN"],
+      [
+        {
+          type: "task-workflow",
+          sessionId: app.sessionId,
+          conversationId: "stale",
+          command: { kind: "status" },
+        },
+        "SESSION_CONFLICT",
+      ],
+    ] satisfies readonly (readonly [RuntimeCommand, string])[]) {
+      const rejected = await app.request(command);
+      expect(await rejected.json()).toMatchObject({ ok: false, error: { code } });
+    }
+
+    // No rejected request or legacy fallback can escape into the model path.
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(prompt).not.toHaveBeenCalled();
+  } finally {
+    repair.mockRestore();
+    prompt.mockRestore();
+    await app.cleanup();
+  }
+});
+
+test("Q13 assistant tool and extension messages cannot acquire user repair provenance", async () => {
+  // A tool returns repair-looking text and the scripted assistant repeats that tool result verbatim.
+  const repair = spyOn(SessionRegistry.prototype, "repair").mockResolvedValue(ok("Repair status"));
+  const app = await repairHost();
+  try {
+    await writeFile(join(app.main, "workspace.txt"), "/repair recheck x");
+
+    expectOk(await app.client.prompt(app.sessionId, "read"));
+    await until(() => !!app.runtime.snapshot.details[app.sessionId]?.result);
+    expectOk(await app.client.prompt(app.sessionId, "/emit-repair"));
+    await until(
+      () =>
+        app.runtime.snapshot.details[app.sessionId]?.sections?.some(
+          (section) => section.kind === "notice" && section.text.includes("/repair recheck x"),
+        ) === true,
+    );
+
+    // Transcript text never loops back into host command admission.
+    const sections = app.runtime.snapshot.details[app.sessionId]!.sections!;
+    expect(
+      sections.some(
+        (section) => section.kind === "tool" && section.text.includes("/repair recheck x"),
+      ),
+    ).toBe(true);
+    expect(
+      sections.some(
+        (section) => section.kind === "assistant" && section.text.includes("/repair recheck x"),
+      ),
+    ).toBe(true);
+    expect(repair).not.toHaveBeenCalled();
+
+    // Repeated genuine user submissions pass through; registry owns operation idempotency.
+    expectOk(await app.client.prompt(app.sessionId, "/repair recheck x"));
+    expectOk(await app.client.prompt(app.sessionId, "/repair recheck x"));
+    expect(repair).toHaveBeenCalledTimes(2);
+    for (const call of repair.mock.calls)
+      expect(call.slice(0, 3)).toEqual([
+        app.sessionId,
+        app.conversationId,
+        { kind: "recheck", id: "x" },
+      ]);
+  } finally {
+    repair.mockRestore();
+    await app.cleanup();
+  }
+});
 
 async function until(predicate: () => Promise<boolean> | boolean): Promise<void> {
   const deadline = Date.now() + 12000;

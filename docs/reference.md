@@ -1009,12 +1009,51 @@ those sessions' original presentation. That user entry is display and persistenc
 authority. Ordinary user text quoting former planning markers cannot activate planning or authorize
 submission. With no arguments it uses
 the requirements already discussed, asking for clarification when needed.
-It investigates the workspace and proposes tasks, prerequisite IDs, inputs, outputs,
-acceptance criteria, expected write scopes and role profiles.
-It does not launch the proposed subagents, run acceptance commands, retry tasks or resume execution.
+It investigates the workspace and coordinates relevant read-only branch leads. It does not launch
+implementation tasks, run acceptance commands, retry repairs or resume execution.
 
-By default the main Agent submits its complete graph and semantic review through `radian-plan`.
-To delegate drafting, add a profile binding to **Pi settings** (`~/.pi/agent/settings.json`, or trusted
+#### Hierarchical planning (default)
+
+The parent discovers available profiles and calls `radian-task declare` with a goal and branches
+`[{id,title,lead:{profile},scope,dependsOn}]`. Choose only relevant leads (for example product,
+engineering, design or QA), not every available profile. The host stores manifest diagnostics for
+unknown profiles, duplicate IDs, missing dependencies and cycles.
+
+For each branch, use `radian-subagent spawn {agent,task,binding:{id: branchId,role:"lead"}}`.
+The host routes spawn/status/wait/reply/stop through planning-purpose coordination; unbound spawn and
+native edit/write remain blocked. Delegation-enabled leads may transitively delegate read-only
+investigation, with the same purpose inherited by every descendant.
+
+Each lead publishes its detailed `{plan,review}` using `radian-task publish-plan`. The durable
+workflow appends revisions with run/profile/role provenance. Parent-visible results and context carry
+bounded summaries and references, not full plan bodies. The parent must not accept, save or rewrite a
+combined replacement. A bound lead or verifier's own `radian-task status` shows host-frozen
+prerequisite refs and bounded summaries captured at spawn, never bodies. Retrieve exactly those
+`ref@revision` bodies on demand with `radian-task status {artifact:"ref@revision"}` while the binding,
+dependency edge and declaration remain current; omitted/latest revisions do not grant dependent reads.
+Other bodies require root/owning-lead authority. Missing inputs mean ask the owner, not claim review;
+respawn to refresh inputs. The parent need not relay upstream bodies.
+
+`radian-plan report` renders host-derived readiness: each branch's lead and artifact reference/revision
+plus summary (or `missing`), manifest diagnostics, dependencies without artifacts and unresolved planner
+questions. Only all published branches without blockers are `ready for review`; otherwise the report is
+`incomplete`, including when a planning turn settles without publishing. Neither state is approval;
+execution has not started. Reports and injected manifest context are bounded to 12,000 characters.
+`radian-plan cancel` stops owned planning runs but retains workflow records and accepted publications.
+The canonical `<origin-session-file>.workflow.json` follows durable collaboration/retention rules;
+see [Durable task collaboration](task-collaboration.md).
+
+A configured `commandAgents.plan` does not select a root super-planner for plain `/plan`. Its request
+and report explicitly state: `commandAgents.plan (<profile>) is a legacy single-planner binding and is
+not used by hierarchical /plan; run /plan --single to use it.` Existing `.plan.json` files remain
+readable through `radian-plan read`; their pointer is injected alongside the workflow summary when
+both exist. No automatic migration, approval or execution occurs.
+
+#### Explicit legacy single-planner mode
+
+`/plan --single [requirements]` retains the former complete-graph workflow. Without a binding, the
+parent submits its complete graph and semantic review through `radian-plan submit`.
+To delegate legacy drafting, add a profile binding to **Pi settings** (`~/.pi/agent/settings.json`, or trusted
 project `.pi/settings.json` for code sessions), not the unified Radian settings file:
 
 ```json
@@ -1025,25 +1064,30 @@ project `.pi/settings.json` for code sessions), not the unified Radian settings 
 
 Create `~/.pi/agent/agents/planner.md` with the normal profile fields. Its `model`, `thinking`, skills
 and body own model selection and planning instructions; the command binding contains only its name.
-Radian reloads the effective binding and discovers the profile on each `/plan`, so changing the model
+Radian reloads the effective binding and discovers the profile on each invocation, so changing the model
 in the profile does not require changing product code or switching the parent's selected model.
-CHAT uses personal settings, not launch-project bindings. Missing bindings retain parent planning;
-an invalid or unavailable configured profile/model fails explicitly, never falling back silently.
+CHAT uses personal settings, not launch-project bindings. In `--single` mode, missing bindings retain
+parent planning; an invalid or unavailable configured profile/model fails explicitly, never falling
+back silently.
 Extension-provided profile models are resolved after provider registration, including cold children.
 
-With a binding, the parent uses `radian-plan delegate` to start one host-designated, read-only child,
+With `--single` and a binding, the parent uses `radian-plan delegate` to start one host-designated, read-only child,
 then `wait` and `reply { questionId, message }` to handle its result or material questions. The child
 receives the requirements, textual conversation context, available roles and the current plan/hash;
 tool payloads and image bytes are not copied into this handoff. It asks for essential missing context.
 The child submits a bounded, complete `{ plan, review }` through `radian-supervisor` action `proposal`.
 This structured channel is separate from the truncated status/notification text. After reviewing it,
 the parent uses `radian-plan accept` to validate and save under its own conversation identity. The
-child cannot write a sidecar or delegate further. `cancel`, interruption, session replacement and a
+child cannot write a sidecar. A delegation-enabled profile may delegate read-only investigation;
+its descendants inherit planning purpose. `cancel`, interruption, session replacement and a
 ten-minute deadline end that owned workflow without approving tasks. Questions may continue in a
 later user turn; cancel a pending workflow before moving to unrelated implementation work.
 
-Only `read`, `grep`, `find`, `ls` and the supervisor protocol are available to a planning child,
-intersected with its profile allowlist even for nested or dynamically loaded tool calls. Shell,
+Planning children's native investigation tools are `{read, grep, find, ls}` intersected with their
+profile allowlist, even for nested or dynamically loaded tool calls. Host protocol tools (supervisor,
+bound workflow and authorized delegation) are exempt from that intersection and enforce their own
+authority. Delegation-enabled profiles additionally receive owned-run coordination under the same
+inherited read-only purpose. Shell,
 terminal, write and MCP tools cannot acquire planning permissions by name or prompt text. This is
 a host tool boundary, not an OS sandbox or protection against trusted extension code itself.
 
@@ -1054,9 +1098,9 @@ role fit and potential shared-file conflicts remain agent assessments, not struc
 The displayed dependency graph is derived from the submitted task data. Structural validation, semantic
 review, user approval and task completion are distinct; saving a plan does not approve or execute it.
 
-Parent sessions expose only `/plan [requirements]`: create or revise a plan, automatically validate
-its structure and present the saved plan and review in the same turn. All arguments are requirements,
-not management subcommands. Planning may use model tokens and rejects busy sessions rather than
+Parent sessions expose `/plan [requirements]` and explicit `/plan --single [requirements]`. Apart from
+the leading `--single` option, arguments are requirements, not management subcommands. The legacy
+single-planner mode presents its saved plan and review in the same turn. Planning may use model tokens and rejects busy sessions rather than
 racing an active run. The command is an SDK extension; an explicitly configured conflicting extension
 can replace this bundled command. Owned child agents do not receive the planner extension.
 
@@ -1066,7 +1110,8 @@ results before reporting completion. Unmet or unverified criteria remain explici
 check is required. This is agent verification guidance, not a runtime scheduler or an automatic
 acceptance-command runner. A saved plan must not be applied to unrelated requests.
 
-Each file-backed SDK conversation owns one adjacent `<session-file>.plan.json` artifact. It contains
+In legacy `--single` mode, each file-backed SDK conversation owns one adjacent
+`<session-file>.plan.json` artifact. It contains
 the plan, its SHA-256 content hash, conversation/workspace identity and agent semantic-review report.
 Updates replace that file rather than creating revision archives; invalid submissions preserve the
 previous valid file. A delegated result also checks its original plan hash inside the serialized save
@@ -1079,8 +1124,9 @@ Subsequent model requests receive a current-plan reference, including after resu
 can read its details through `radian-plan`. Restart never executes saved tasks. A new conversation in
 the same tab owns a separate plan. Internal plan reads validate the stored structure and content hash.
 
-The planning turn blocks native edit/write calls and delegated-work actions while allowing profile
-listing. These guards remain active through model/tool turns and retry until the run settles; ordinary
+The legacy single-planner turn blocks native edit/write calls and ordinary delegated-work actions
+while allowing profile listing. Hierarchical planning additionally allows declared lead spawns and
+owned planning-run status/wait/reply/stop. These guards remain active through model/tool turns and retry until the run settles; ordinary
 requests after completion, failure or cancellation regain their normal tool access. Runtime actions
 should use structured command and SDK state rather than infer authority from prompt text; the other
 host controls already use their own typed paths. This is not an OS sandbox: planning instructions
@@ -1969,10 +2015,13 @@ delegation:
 
 Omitting `delegation` or setting `enabled: false` preserves leaf behavior. Only the `enabled` key is
 supported; target allowlists such as `allowedAgents` are not part of this contract. An authorized
-coordinator may target any profile in the host's trusted catalog. A read-only coordinator can launch
-a write-capable worker: its personal execution tools are not the descendant permission ceiling.
-This is delegated authority, not transitive read-only confinement. Launch capabilities are host-owned
-and cannot be expanded by tool arguments or silently upgraded through a live profile reload.
+coordinator may target any profile in the host's trusted catalog, subject to workflow spawn authority.
+A coordinator with a read-only profile allowlist can launch a write-capable worker: its personal tools
+are not the descendant permission ceiling. Host planning/analysis purpose is different: descendants
+inherit that read-only purpose, and unbound descendants of a bound run inherit the nearest bound
+ancestor's per-call write authorization. This is delegated authority, not an OS sandbox. Launch
+capabilities are host-owned and cannot be expanded by tool arguments or silently upgraded through a
+live profile reload.
 Legacy `advertise`, `systemPromptMode`, `inherit*` and `extensions` profile fields are not supported:
 profiles are advertised by default; Pi's base prompt, common/project context and activated extensions
 remain available without per-profile filesystem paths. Role instructions append to the normal prompt.

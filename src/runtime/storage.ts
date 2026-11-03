@@ -27,6 +27,16 @@ import {
 import type { SessionDeletionCandidate, SessionRecord } from "../agents/session-registry.ts";
 import type { CleanupReceipt, ScopeWorktree } from "./daemon-protocol.ts";
 import {
+  deleteWorkflowForPurge,
+  deleteWorkflowForRetention,
+  inspectWorkflowForRetention,
+  inspectedWorkflowSchema,
+  recheckWorkflowForRetention,
+  workflowFilePath,
+  workflowLinkFilePath,
+  type InspectedWorkflow,
+} from "../agents/task-workflow-store.ts";
+import {
   deleteTaskPlanForPurge,
   deleteTaskPlanForRetention,
   planFilePath,
@@ -154,6 +164,7 @@ const snapshotIndexSchema = Type.Object({
       }),
     ]),
   ),
+  cleanupWorkflow: Type.Optional(inspectedWorkflowSchema),
   expiredAt: sessionRecordSchema.properties.updatedAt,
   lifecycle: Type.Union([Type.Literal("open"), Type.Literal("closed")]),
   updatedAt: Type.Integer({ minimum: 0, maximum: 8640000000000000 }),
@@ -441,6 +452,7 @@ const snapshotKey = (record: SessionRecord) => digest(sessionRecordKey(record));
 // One shared session record per conversation. The workspace file holds only a small index;
 // closed bodies with SDK originals are read lazily by History, never instantiated for recovery.
 export class RuntimeStore implements SessionSnapshotSource {
+  readonly retentionWarnings: string[] = [];
   private tail: Promise<Result<unknown, ExpectedError>> = Promise.resolve(ok(undefined));
   private entries = new Map<string, SnapshotIndex>();
   private readonly legacy = new Map<string, SessionRecord>();
@@ -1057,6 +1069,7 @@ export class RuntimeStore implements SessionSnapshotSource {
       return ok(0);
     }
 
+    this.retentionWarnings.length = 0;
     let removed = 0;
     const failures: ExpectedError[] = [];
     // Publishing a pruned index replaces the live map during this sweep.
@@ -1129,6 +1142,8 @@ export class RuntimeStore implements SessionSnapshotSource {
         const inspected = await this.inspectPlan(entry);
         if (!inspected.ok) return inspected;
         plan = inspected.value;
+        const workflow = await this.inspectWorkflow(entry);
+        if (!workflow.ok) return workflow;
 
         const again = await capture(() => lstat(sessionFile));
         if (again.ok) return ok(0);
@@ -1138,6 +1153,22 @@ export class RuntimeStore implements SessionSnapshotSource {
         if (planOwner) {
           const checked = await recheckTaskPlanForRetention(sessionFile, planOwner, plan);
           if (!checked.ok) return checked;
+          const checkedWorkflow = await recheckWorkflowForRetention(
+            sessionFile,
+            planOwner,
+            workflow.value,
+          );
+          if (!checkedWorkflow.ok) return checkedWorkflow;
+          const removedWorkflow = await deleteWorkflowForRetention(
+            sessionFile,
+            planOwner,
+            workflow.value,
+          );
+          if (!removedWorkflow.ok) return removedWorkflow;
+          if (removedWorkflow.value === "retained")
+            this.retentionWarnings.push(
+              `Retained workflow ${workflowFilePath(sessionFile)}: a live continuation still references it.`,
+            );
           const deleted = await deleteTaskPlanForRetention(sessionFile, planOwner, plan);
           if (!deleted.ok) return deleted;
         }
@@ -1183,6 +1214,24 @@ export class RuntimeStore implements SessionSnapshotSource {
     return inspectTaskPlanForRetention(entry.sessionFile, owner);
   }
 
+  private async inspectWorkflow(
+    entry: SnapshotIndex,
+  ): Promise<Result<InspectedWorkflow, ExpectedError>> {
+    if (!entry.sessionFile) return ok({ kind: "absent" });
+    const owner = this.planOwner(entry);
+    if (owner) return inspectWorkflowForRetention(entry.sessionFile, owner);
+    for (const path of [
+      workflowFilePath(entry.sessionFile),
+      workflowLinkFilePath(entry.sessionFile),
+    ]) {
+      const found = await capture(() => lstat(path));
+      if (found.ok) return err(new StorageError("Cannot verify ownership of workflow sidecar."));
+      if (!(found.error instanceof StorageError && found.error.systemCode === "ENOENT"))
+        return found;
+    }
+    return ok({ kind: "absent" });
+  }
+
   private async pruneEntry(
     entry: SnapshotIndex,
     reserve: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null,
@@ -1214,6 +1263,27 @@ export class RuntimeStore implements SessionSnapshotSource {
     }
     const plan = await this.inspectPlan(entry);
     if (!plan.ok) return plan;
+    const workflow = await this.inspectWorkflow(entry);
+    if (!workflow.ok) return workflow;
+    if (
+      !entry.cleanupPending &&
+      workflow.value.kind === "ready" &&
+      (workflow.value.updatedAt > entry.updatedAt ||
+        Math.floor(workflow.value.fingerprint.mtimeMs) > entry.updatedAt)
+    )
+      return ok(0);
+    const expectedWorkflow = entry.cleanupWorkflow ?? { kind: "absent" as const };
+    const workflowAlreadyRemoved =
+      entry.cleanupPending &&
+      inspected.value.kind === "absent" &&
+      workflow.value.kind === "absent" &&
+      expectedWorkflow.kind === "ready";
+    if (
+      entry.cleanupPending &&
+      !workflowAlreadyRemoved &&
+      JSON.stringify(workflow.value) !== JSON.stringify(expectedWorkflow)
+    )
+      return err(new StorageError("Workflow changed during interrupted retention cleanup."));
     if (
       !entry.cleanupPending &&
       plan.value.kind === "ready" &&
@@ -1253,6 +1323,7 @@ export class RuntimeStore implements SessionSnapshotSource {
         ...entry,
         cleanupPending: true,
         cleanupPlan: entry.cleanupPlan ?? plan.value,
+        cleanupWorkflow: entry.cleanupWorkflow ?? workflow.value,
       };
       if (!entry.cleanupPending) {
         const marked = new Map(this.entries);
@@ -1270,7 +1341,10 @@ export class RuntimeStore implements SessionSnapshotSource {
           return err(new StorageError("Cannot verify ownership of task plan sidecar."));
         }
         if (owner) {
-          const checked = await recheckTaskPlanForRetention(entry.sessionFile, owner, plan.value);
+          const planCheck = await recheckTaskPlanForRetention(entry.sessionFile, owner, plan.value);
+          const checked = planCheck.ok
+            ? await recheckWorkflowForRetention(entry.sessionFile, owner, workflow.value)
+            : planCheck;
           if (!checked.ok) {
             if (!entry.cleanupPending) {
               const restored = new Map(this.entries);
@@ -1315,6 +1389,16 @@ export class RuntimeStore implements SessionSnapshotSource {
         if (owner) {
           const sidecar = await deleteTaskPlanForRetention(entry.sessionFile, owner, plan.value);
           if (!sidecar.ok) return sidecar;
+          const removedWorkflow = await deleteWorkflowForRetention(
+            entry.sessionFile,
+            owner,
+            workflow.value,
+          );
+          if (!removedWorkflow.ok) return removedWorkflow;
+          if (removedWorkflow.value === "retained")
+            this.retentionWarnings.push(
+              `Retained workflow ${workflowFilePath(entry.sessionFile)}: a live continuation still references it.`,
+            );
         }
       }
 
@@ -1324,7 +1408,13 @@ export class RuntimeStore implements SessionSnapshotSource {
       }
 
       // Keep only a small, redacted identity marker so stale checkpoints cannot resurrect expired data.
-      const { sessionFile: _file, cwd: _cwd, cleanupPlan: _plan, ...identity } = pending;
+      const {
+        sessionFile: _file,
+        cwd: _cwd,
+        cleanupPlan: _plan,
+        cleanupWorkflow: _workflow,
+        ...identity
+      } = pending;
       const finished = new Map(this.entries);
 
       finished.set(entry.key, {
@@ -2472,6 +2562,50 @@ async function purgeFenced(
       }
     }
 
+    if (planOwner) {
+      const workflowInspection = await inspectWorkflowForRetention(file, planOwner);
+      if (!workflowInspection.ok) {
+        if (conversation) conversation.failed = true;
+        residual(workflowFilePath(file), workflowInspection.error);
+        continue;
+      }
+      const workflowPath =
+        workflowInspection.value.kind === "ready" && workflowInspection.value.sidecar === "link"
+          ? workflowLinkFilePath(file)
+          : workflowFilePath(file);
+      const workflow = await deleteWorkflowForPurge(file, planOwner);
+      if (!workflow.ok) {
+        if (conversation) conversation.failed = true;
+        residual(workflowFilePath(file), workflow.error);
+        continue;
+      }
+      if (workflow.value === "retained")
+        preserved.push({
+          path: workflowFilePath(file),
+          reason: "Workflow retained because a live continuation still references it.",
+        });
+      else if (workflow.value === "removed") removed.push(workflowPath);
+    } else {
+      let unverified = false;
+      for (const path of [workflowFilePath(file), workflowLinkFilePath(file)]) {
+        const found = await capture(() => lstat(path));
+        if (
+          found.ok ||
+          !(found.error instanceof StorageError && found.error.systemCode === "ENOENT")
+        ) {
+          residual(
+            path,
+            found.ok ? new StorageError("Cannot verify workflow owner.") : found.error,
+          );
+          unverified = true;
+        }
+      }
+      if (unverified) {
+        if (conversation) conversation.failed = true;
+        continue;
+      }
+    }
+
     if (original.kind === "owned") {
       const deleted = await unlinkIfSame(file, original.fingerprint, owned.value);
       if (!deleted.ok) {
@@ -2490,9 +2624,13 @@ async function purgeFenced(
     const listed = await capture(() => readdir(directory));
     if (!listed.ok) continue;
     for (const name of listed.value) {
-      if (!name.endsWith(".jsonl.plan.json")) continue;
-      const original = join(directory, name.slice(0, -".plan.json".length));
+      const suffix = [".plan.json", ".workflow.json", ".workflow-link.json"].find((suffix) =>
+        name.endsWith(".jsonl" + suffix),
+      );
+      if (!suffix) continue;
+      const original = join(directory, name.slice(0, -suffix.length));
       const sidecar = join(directory, name);
+      if (preserved.some((item) => item.path === sidecar)) continue;
       const exists = await capture(() => lstat(original));
       if (exists.ok) {
         if (whole)
@@ -2505,8 +2643,16 @@ async function purgeFenced(
           residual(sidecar, new StorageError("Cannot verify ownership of task plan sidecar."));
         continue;
       }
-      const plan = await deleteTaskPlanForPurge(original, owner);
+      const plan =
+        suffix === ".plan.json"
+          ? await deleteTaskPlanForPurge(original, owner)
+          : await deleteWorkflowForPurge(original, owner);
       if (plan.ok && plan.value === "removed") removed.push(sidecar);
+      else if (plan.ok && plan.value === "retained")
+        preserved.push({
+          path: sidecar,
+          reason: "Workflow retained because a live continuation still references it.",
+        });
       else if (!plan.ok) residual(sidecar, plan.error);
     }
   }
@@ -2680,7 +2826,9 @@ async function sidecarOwner(path: string): Promise<{ conversationId: string; cwd
   if (!read.ok) return null;
   const parsed = parseJson(read.value, "task plan sidecar");
   if (!parsed.ok || !parsed.value || typeof parsed.value !== "object") return null;
-  const owner = (parsed.value as { owner?: unknown }).owner;
+  const owner = path.endsWith(".workflow.json")
+    ? (parsed.value as { origin?: unknown }).origin
+    : (parsed.value as { owner?: unknown }).owner;
   if (
     !owner ||
     typeof owner !== "object" ||
@@ -2783,6 +2931,10 @@ async function removeRepositoryLeftovers(
     }
     let left = 0;
     for (const name of listed.value) {
+      if (preserved.some((item) => item.path === join(canonical.value!, name))) {
+        left++;
+        continue;
+      }
       if (known(name)) {
         await unlinkKnown(join(canonical.value, name));
       } else {

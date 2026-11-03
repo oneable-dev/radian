@@ -251,12 +251,13 @@ implementation notes, including:
 
 ## Current scope
 
-- [`/plan`](docs/reference.md#graph-planning) creates, structurally validates and presents a
-  task/delegation graph without executing its tasks. After authorized implementation, the parent
-  compares actual results with the plan's acceptance criteria before reporting completion.
-  Each conversation retains one current plan, cleaned up through normal session retention.
-  Optional Pi `commandAgents.plan` settings delegate drafting to a user profile's model; the parent
-  stays on its selected model and alone validates/saves the read-only child's structured proposal.
+- [`/plan`](docs/reference.md#graph-planning) coordinates relevant read-only branch leads. Leads own
+  durable, revisioned plan artifacts; the parent receives bounded summaries/references and reports
+  readiness, never approval or execution. `/plan --single` explicitly retains the legacy single
+  planner/parent-save workflow and optional Pi `commandAgents.plan` binding; plain `/plan` ignores
+  that binding with a notice. After authorized implementation, compare actual evidence with applicable
+  acceptance criteria. Plans and workflows follow normal session retention; see
+  [durable task collaboration](docs/task-collaboration.md) for role-bound QA and three-failure locks.
 - Git browsing is **read-only**: staging, commits, branch switching, and conflict
   resolution are not built into the Git view.
 - Live editor and terminal state survives interface detach, not runtime shutdown.
@@ -282,7 +283,8 @@ symlinks. The executable includes Bun; owned SDK subagents run inside the Radian
 without a separate Pi CLI or Node. Define their roles, models, required skills and tool
 allowlists in `~/.pi/agent/agents/*.md`, then coordinate them through `radian-subagent`.
 Profiles opting into `delegation.enabled: true` may supervise their own children; omitted/false stays
-leaf-only and planning children remain read-only and non-delegating. Each root shares a maximum of
+leaf-only. Planning children remain read-only; delegation-enabled planning profiles may coordinate
+read-only descendants under the same inherited purpose. Each root shares a maximum of
 five active descendants, 128 retained runs and depth three. Profiles are user/project configuration,
 not bundled role defaults; keep personal profiles in your dotfiles and link them into the user profile
 directory. See the [profile format and delegation contracts](docs/reference.md#agent-profiles-and-collaboration)

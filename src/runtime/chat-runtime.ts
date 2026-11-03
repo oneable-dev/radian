@@ -12,6 +12,11 @@ import {
 } from "../agents/session-registry.ts";
 import { previewSessionSnapshot, readHistoryPreview } from "../agents/history-preview.ts";
 import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
+import {
+  parseRepairCommand,
+  userCommandProvenance,
+  type RepairCommand,
+} from "../agents/repair-command.ts";
 import { sessionRecordKey } from "../agents/session-snapshot.ts";
 import {
   CancelledError,
@@ -490,7 +495,19 @@ export class ChatRuntime {
           command.action,
           command.instructions,
         );
+      case "task-workflow":
+        return this.repair(command.sessionId, command.conversationId, command.command);
       case "prompt": {
+        const repair = parseRepairCommand(command.text);
+        if (!repair.ok) return repair;
+        if (repair.value) {
+          if (command.images?.length) {
+            return err(new InputError("/repair does not accept image attachments."));
+          }
+          // Legacy UI wire prompts are direct user submissions. Model/tool/extension
+          // messages never enter this admission path and cannot acquire user provenance.
+          return this.repair(command.sessionId, command.conversationId, repair.value);
+        }
         const state = this.registry.details(command.sessionId);
         if (!state)
           return err(new SessionError("SESSION_NOT_OPEN", "CHAT conversation is not open."));
@@ -547,6 +564,32 @@ export class ChatRuntime {
           ),
         );
     }
+  }
+
+  private async repair(
+    sessionId: string,
+    conversationId: string | undefined,
+    command: RepairCommand,
+  ): Promise<Result<string, ExpectedError>> {
+    const state = this.registry.details(sessionId);
+    if (!state || this.failed.has(sessionId)) {
+      return err(new SessionError("SESSION_NOT_OPEN", "CHAT conversation is not open."));
+    }
+    if (!conversationId || state.conversationId !== conversationId) {
+      return err(
+        new SessionError(
+          "SESSION_CONFLICT",
+          "Conversation changed; no /repair command was accepted.",
+        ),
+      );
+    }
+
+    return this.registry.repair(
+      sessionId,
+      conversationId,
+      command,
+      userCommandProvenance(conversationId, Date.now()),
+    );
   }
 
   private async control(

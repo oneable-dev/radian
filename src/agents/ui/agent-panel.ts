@@ -37,6 +37,7 @@ import { parseModelCommand } from "../model-selection.ts";
 import { parseAccountsCommand } from "../../accounts/model.ts";
 import { parseHistoryCommand } from "../history-command.ts";
 import { parseDashboardCommand } from "../dashboard-command.ts";
+import { parseRepairCommand } from "../repair-command.ts";
 
 export type AgentActions = {
   // Invoke onCreated only after the new session is observable in the workspace snapshot.
@@ -1042,7 +1043,10 @@ export class AgentPanel {
     this.submitting.add(id);
     this.changed();
     try {
-      const prepared = this.completion.prepareCommandSubmission();
+      // Reserved host input must not be replaced by an extension/template completion.
+      const hostRepair = parseRepairCommand(this.prompt.submission.text);
+      const prepared =
+        !hostRepair.ok || hostRepair.value ? true : this.completion.prepareCommandSubmission();
       const ready = typeof prepared === "boolean" ? prepared : await prepared;
       if (!ready) {
         return;
@@ -1060,6 +1064,14 @@ export class AgentPanel {
       const fingerprint = (value: PromptDraft | undefined) =>
         value ? JSON.stringify([value.value, value.tokens]) : "";
       const sent = fingerprint(draft);
+      const repair = parseRepairCommand(submission.text);
+      if (!repair.ok) {
+        this.notice(`[${repair.error.code}] ${repair.error.message} · prompt retained`, {
+          level: "error",
+        });
+
+        return;
+      }
       const control = parseSessionControl(submission.text);
       if (!control.ok) {
         this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`, {
@@ -1106,6 +1118,7 @@ export class AgentPanel {
       }
       // Non-conversation actions must not reset the outgoing conversation's reading position.
       if (
+        !repair.value &&
         !accounts.value &&
         !model.value &&
         !history.value &&

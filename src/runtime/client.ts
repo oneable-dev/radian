@@ -53,6 +53,7 @@ import { NdjsonDecoder } from "./frames.ts";
 import { TranscriptStore } from "./transcript-frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
 import { parseHistoryCommand } from "../agents/history-command.ts";
+import { parseRepairCommand } from "../agents/repair-command.ts";
 import { parseDashboardCommand } from "../agents/dashboard-command.ts";
 import {
   accountRequestSchema,
@@ -1471,6 +1472,37 @@ export class RuntimeClient {
     text: string,
     images: readonly string[] = [],
   ): Promise<Result<void, ExpectedError>> {
+    const repair = parseRepairCommand(text);
+    if (!repair.ok) return repair;
+    if (repair.value) {
+      if (images.length) {
+        return err(
+          new InputError("/repair does not accept image attachments. Input was retained."),
+        );
+      }
+      if (!this.state.capabilities?.includes("task-repair")) {
+        return err(
+          new CapabilityError(
+            "Running service predates /repair. Finish work and restart it explicitly when ready. No prompt was sent.",
+          ),
+        );
+      }
+      const conversationId = this.state.details[sessionId]?.conversationId;
+      if (!conversationId) {
+        return err(
+          new ProtocolError(
+            "Current conversation identity is unavailable. Reconnect before retrying. No command was sent.",
+          ),
+        );
+      }
+      const result = await this.command(
+        { type: "task-workflow", sessionId, conversationId, command: repair.value },
+        { instance: this.state.instance, epoch: this.connectionEpoch },
+      );
+
+      return result.ok ? ok(undefined) : result;
+    }
+
     const accounts = parseAccountsCommand(text);
     if (!accounts.ok) {
       return accounts;

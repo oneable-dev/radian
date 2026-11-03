@@ -1,49 +1,48 @@
 ---
 name: graph-plan
-description: Create and review a structurally validated task and delegation graph without implementing or executing its tasks.
+description: Coordinate read-only branch leads and report durable planning readiness without executing tasks.
 ---
 
 # Graph planning
 
-Create a plan, not an implementation. Do not edit product files, install dependencies, run task acceptance commands, commit, or execute the proposed work. Read repository instructions and relevant code to ground the plan. Shell access is for read-only investigation, not a sandbox or permission to mutate the workspace.
+Plan, do not implement. Read repository instructions, requirements and relevant code. Do not edit product files, install dependencies, run tests/builds or acceptance commands, commit, or execute proposed implementation tasks. Shell access is for read-only investigation, not an OS sandbox.
 
-If the host identifies a configured planning agent, use only `radian-plan` actions `delegate`, `wait`, `reply`, `cancel`, and `accept` to manage that read-only planning request. Delegate once, inspect the complete structured proposal, relay material questions to the user, and accept only after reviewing it. The planning agent drafts; the parent conversation alone validates and saves. Do not submit a parent-authored replacement or use ordinary subagent tools to bypass this workflow. Cancel a pending workflow before moving to unrelated implementation work. Without a configured planning agent, investigate and submit the plan in the parent as described below. Never spawn the agents assigned to implementation tasks during planning.
+## Hierarchical planning (default `/plan`)
 
-## Establish the contract
+1. Establish the goal, scope, constraints and observable acceptance criteria. Separate confirmed facts, assumptions and material unanswered questions. Ask the user about decisions outside your authority.
+2. Discover `availableAgents` through `radian-subagent list`. Select only relevant branch leads, such as product-lead, tech-lead, ui-ux-lead or QA; not every profile is required. Do not invent unavailable profiles or use a configured legacy planner as a root super-planner.
+3. Declare scope using `radian-task` with `action: "declare"`, `goal`, and `branches: [{id,title,lead:{profile},scope,dependsOn}]`. Stable IDs may be re-declared to replan a branch. Only the declared branches are current; history is retained, not required. Dependencies reference other current branch IDs. The host retains unknown profiles, missing dependencies, duplicates and cycles as diagnostics; do not call a diagnosed manifest ready.
+4. Spawn each declared lead using `radian-subagent spawn` with its assigned `agent`, a bounded `task`, and `binding: {id: branchId, role: "lead"}`. Provide requirements, branch scope, evidence, dependencies, available roles and acceptance expectations. Ask the lead to publish its detailed plan and return only a bounded summary/reference. These are read-only planning runs, not implementation runs. Delegation-enabled leads may delegate read-only investigation transitively; every descendant inherits planning purpose.
+   Spawn a dependent lead after its upstream publishes: the host freezes upstream artifact references at spawn. If an upstream republishes, respawn the dependent lead and republish to refresh coverage. A lead bound before its branch's latest declaration must also be respawned.
 
-1. Identify the user's goal, scope, constraints, and observable acceptance criteria. Read supplied requirements and relevant existing code before choosing tasks.
-2. Separate confirmed facts from assumptions. Ask about decisions that would materially change the work. Keep unresolved questions explicit; do not silently invent product policy.
-3. Use `radian-plan` with `action: "read"` when updating the current conversation's plan. Its saved file is authoritative; older submissions in the transcript are historical.
+5. Use `status`, `wait` and `reply` for owned planning runs. Relay material questions to the user when necessary. Do not poll or sleep. Resolve questions explicitly, never interpret silence as approval. Stop abandoned runs or use `radian-plan cancel`; cancellation retains durable records and cannot roll back accepted publications.
+6. Leads own detailed plans. Each assigned lead calls `radian-task publish-plan` with `artifactId`, complete `plan`, and `review`. The host validates and appends a revision with run/profile/role provenance. The parent receives only a bounded summary and `ref@revision`. Do not request a full proposal, copy or rewrite branch bodies, use parent submit, or accept/save a combined replacement.
+7. Call `radian-plan report`. Present the host's readiness, branch owners, artifact references/summaries, diagnostics, unpublished dependencies and unanswered questions. Readiness is `ready for review` only when every declared branch has an artifact and no blockers remain; otherwise it is `incomplete`. Never call it approved. Execution has not started. Settling without publication produces an incomplete report, not success.
 
-## Build a task and delegation graph
+The workflow context carries a bounded goal/branch/reference/diagnostic summary, never full artifact bodies. When details are essential, the root or owning lead may explicitly retrieve `radian-task status` with `artifact: "ref@revision"`; another lead may not read a foreign branch body. A legacy `.plan.json` pointer may also exist; `radian-plan read` reads it, not the hierarchical workflow.
 
-Submit a JSON plan with all of these fields:
+## Detailed lead plan and review
 
-- `schemaVersion`: `1`.
-- `goal`: the intended outcome.
-- `outOfScope`, `assumptions`, `openQuestions`: arrays of nonblank strings; empty arrays are allowed.
-- `tasks`: a nonempty array of tasks, each containing:
-  - `id`: a stable identifier using letters, digits, `_`, or `-`, beginning with a letter or digit.
-  - `title`: one cohesive outcome.
-  - `agent`: `main` or an actually available role profile. Assignment is a proposal, not execution. Use `main` when the host does not advertise role profiles or profile discovery. Only use a list action when the host actually provides one; do not execute the assigned agents.
-  - `dependsOn`: IDs of prerequisites; roots use `[]`.
-  - `inputs`: required contracts, evidence, or artifacts; `[]` is allowed.
-  - `outputs`: at least one concrete artifact or decision.
-  - `acceptanceCriteria`: at least one observable check, described but not executed now.
-  - `files`: expected workspace-relative write scope; `[]` is allowed for investigation tasks. Scope is not a file lock.
+Publish a complete JSON plan with:
 
-Choose dependencies from actual input/output requirements, not an arbitrary numbered sequence. Make shared contracts explicit before parallel implementation. Avoid unnecessary task fragmentation and unnecessary delegation. Plan parallelism only where dependencies and write scopes permit it. Do not maintain a separate authoritative edge list or hand-written graph.
+- `schemaVersion: 1`, `goal`, and arrays `outOfScope`, `assumptions`, `openQuestions` (empty arrays allowed).
+- A nonempty `tasks` array. Each task contains `id`, `title`, `agent`, `dependsOn`, `inputs`, `outputs`, `acceptanceCriteria`, `files`.
+- IDs use letters, digits, `_` or `-` and start with a letter or digit. Dependencies reference task IDs in the same plan. External prerequisites belong in inputs and the declared branch dependencies.
+- `agent` is `main` or an actually available profile. Proposed implementation assignments do not authorize spawning them during planning.
+- Outputs and acceptance criteria contain observable deliverables/checks; describe checks without executing them. Files describe expected workspace-relative write scope, not locks.
 
-## Review and submit
+Choose dependencies from actual inputs/outputs rather than arbitrary numbered order. Make shared contracts and file conflicts explicit before parallel work. Review coverage, useful task size, role availability, verification coverage, risks and open decisions. Publish `review: {summary, warnings: []}` describing the semantic review actually performed. Structural validity is not semantic correctness, user approval or completion.
 
-Review requirement coverage, task size, prerequisite artifacts, role fit, shared-file risks, verification coverage, and unresolved decisions. Plans may be structurally valid while still needing a user decision. Report those limitations honestly.
+## Explicit legacy single-planner compatibility
 
-With a configured planning agent, inspect its complete proposal returned by `radian-plan wait`, review requirement coverage and limitations, then call `radian-plan` with `action: "accept"`. Do not copy the proposal through a truncated status transcript. The child returns its full `plan` and `review` through `radian-supervisor` action `proposal`; it cannot write a plan sidecar. An invalid or unfinished proposal must not be accepted.
+Only `/plan --single [requirements]` uses the former conversation-wide `.plan.json` workflow:
 
-Without a configured planning agent, call `radian-plan` with `action: "submit"`, the complete `plan`, and `review: { "summary": "...", "warnings": [] }`. In both workflows, the summary describes the semantic review actually performed. Warnings contain remaining risks or limitations; they are not structural errors. The host validates the graph and atomically replaces the current saved plan only on success. An invalid submission, cancellation, timeout, or superseded request must not replace the previous valid plan. Correct reported structural errors before claiming success.
+- With `commandAgents.plan`, use `radian-plan delegate` once, then `wait`/`reply`. The read-only child returns `{plan,review}` through `radian-supervisor proposal`. Review its complete proposal and use `radian-plan accept`; do not submit a parent replacement. Invalid, unfinished, stale or cancelled proposals do not replace the prior file.
+- Without that binding, investigate in the parent and use `radian-plan submit` with the complete plan and review.
+- Present the saved graph, assignments, outputs, acceptance criteria and limitations in the same turn. The parent alone validates/saves the sidecar. This compatibility path is not the hierarchical default.
 
-Always present the saved plan's task dependencies, proposed role assignments, outputs, acceptance criteria, semantic review, warnings, and unresolved questions in this planning turn. Do not require a separate command to display or check it. State separately that structure passed, semantic review is an agent assessment, user approval is not implied, and no tasks were executed. Use the same saved plan data rather than inventing a second graph in prose.
+Plain `/plan` never uses `commandAgents.plan`; the host explicitly reports that it is a legacy single-planner binding and points to `/plan --single`.
 
-## Later implementation handoff
+## Later authorized execution
 
-When the user later authorizes implementation, the parent reads the saved plan through `radian-plan` and checks that it applies to the requested work. Before reporting completion, compare each applicable acceptance criterion with the actual changes and verification evidence. Report unmet or unverified criteria and remaining work without requiring the user to request a manual plan check. Do not apply a stale plan to unrelated requests. This is the parent's verification workflow, not an automatic task scheduler or permission to execute acceptance commands during planning.
+Planning is not an automatic scheduler. After the user authorizes implementation, inspect applicable artifacts and compare acceptance criteria with actual changes and verification evidence before reporting completion. Keep unmet/unverified criteria explicit; do not apply stale plans to unrelated work. Bind implementation and QA to the same durable task. Three failed automated repairs permanently lock the defect across reassignment, splitting and continuation: responsible leads supply read-only analysis, then wait for the user's host `/repair` command. Model messages and notifications are never human repair authorization.

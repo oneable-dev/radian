@@ -14,11 +14,144 @@ import { runCompletionEntryType } from "./run-completion.ts";
 import { summarizeRequest } from "./request-summary.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 import { tinyPng } from "../testing/image.ts";
-import { ok } from "../result.ts";
+import { err, ok } from "../result.ts";
+import { WorkflowError } from "../errors.ts";
 import { readHistoryPreview } from "./history-preview.ts";
 import { commandDisplayEntryType } from "./command-display.ts";
 import { SessionHistory } from "./history.ts";
 import { readTaskPlan } from "./task-plan-store.ts";
+
+test.each(
+  [
+    { label: "undefined", allowed: undefined, expected: ["read", "grep", "find", "ls"] },
+    { label: "empty", allowed: [], expected: [] },
+    { label: "grep", allowed: ["grep"], expected: ["grep"] },
+    { label: "*", allowed: ["*"], expected: ["read", "grep", "find", "ls"] },
+    { label: "gr*", allowed: ["gr*"], expected: ["grep"] },
+  ].map((scenario) => [scenario.label, scenario] as const),
+)(
+  "Q03 S01 Read-only SDK loadout intersects the profile allowlist: %s",
+  async (_label, { allowed, expected }) => {
+    const files = await createWorktreeFixture();
+    const offline = await offlineRuntime(join(files.directory, "agent"));
+    const declared: string[] = [];
+    const executor = await piSessionFactory({
+      ...offline,
+      streamFn(model, context, options) {
+        declared.push(
+          ...context.messages.flatMap((message) =>
+            message.role === "system" ? (message.toolsAdded ?? []).map((tool) => tool.name) : [],
+          ),
+        );
+        return offline.streamFn!(model, context, options);
+      },
+    })({
+      cwd: files.main,
+      role: "subagent",
+      purpose: "analysis",
+      agent: "analyst",
+      spawnSubagent: async () => err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Not used")),
+      profile: {
+        name: "analyst",
+        description: "Read-only fixture",
+        prompt: "Inspect only",
+        path: "/agents/analyst.md",
+        skills: [],
+        ...(allowed === undefined ? {} : { tools: allowed }),
+      },
+    });
+    try {
+      expectOk(await executor.prompt("Inspect the declared tools"));
+
+      expect(
+        declared.filter((name) => ["read", "grep", "find", "ls"].includes(name)).sort(),
+      ).toEqual([...expected].sort());
+      expect(declared).not.toContain("write");
+      expect(declared).not.toContain("bash");
+      expect(declared).toContain("radian-supervisor");
+    } finally {
+      await executor.close();
+      await files.cleanup();
+    }
+  },
+);
+
+test.each([
+  ["bound", "denied"],
+  ["bound", "throws"],
+  ["unbound", "denied"],
+] as const)(
+  "Q15 D04 SDK write with %s binding cannot execute when its host authorizer %s",
+  async (binding, outcome) => {
+    const files = await createWorktreeFixture();
+    const offline = await offlineRuntime(join(files.directory, "agent"));
+    const marker = join(files.main, "blocked-write.txt");
+    const authorized: string[] = [];
+    const executor = await piSessionFactory({
+      ...offline,
+      streamFn(model, context, options) {
+        if (context.messages.at(-1)?.role !== "user")
+          return offline.streamFn!(model, context, options);
+        const stream = createAssistantMessageEventStream();
+        const message = fixtureMessage(model.api, model.provider, model.id);
+        message.content = [
+          {
+            type: "toolCall",
+            id: "blocked-write",
+            name: "write",
+            arguments: { path: marker, content: "unexpected" },
+          },
+        ];
+        message.stopReason = "toolUse";
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+        return stream;
+      },
+    })({
+      cwd: files.main,
+      role: "subagent",
+      spawnSubagent: async () => err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Not used")),
+      ...(binding === "bound"
+        ? {
+            binding: {
+              workflowId: crypto.randomUUID(),
+              taskId: "task-main",
+              role: "implementer",
+              assignmentVersion: 0,
+            } as const,
+          }
+        : {}),
+      authorizeTool: async (name) => {
+        authorized.push(name);
+        if (outcome === "throws") throw new Error("Unexpected authorization failure");
+        return err(new WorkflowError("WORKFLOW_REPAIR_LOCKED", "Repair is locked."));
+      },
+    });
+    try {
+      expectOk(await executor.prompt("Try writing"));
+
+      expect(authorized).toEqual(["write"]);
+      expect(await Bun.file(marker).exists()).toBe(false);
+      expect(
+        executor.state.sections?.some(
+          (section) => section.kind === "tool" && section.status === "error",
+        ),
+      ).toBe(true);
+      const reason =
+        outcome === "throws"
+          ? "Unexpected authorization failure"
+          : "[WORKFLOW_REPAIR_LOCKED] Repair is locked.";
+      expect(
+        executor.state.sections?.some(
+          (section) => section.kind === "tool" && section.text?.includes(reason),
+        ),
+      ).toBe(true);
+    } finally {
+      await executor.close();
+      await files.cleanup();
+    }
+  },
+);
 
 function controlledStreams(options: PiSessionOptions) {
   const gates = new Map<
@@ -195,6 +328,45 @@ test("history completion overrides extensions and raw submission never reaches S
     expect(expectError(invalid).code).toBe("INVALID_INPUT");
     expect(requests).toBe(0);
     expect(app.registry.details(id)?.sections).toEqual([]);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Q13 Reserved repair prompts never reach the model and host notices do not start turns", async () => {
+  // Neither a raw prompt nor an extension collision can manufacture a human repair action.
+  let requests = 0;
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      requests++;
+      return options.streamFn!(model, context, request);
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const executor = app.executors[0]!;
+    const conversation = app.registry.details(id)!.conversationId!;
+    expectOk(await app.registry.prompt(id, "Create the prior conversation"));
+    requests = 0;
+
+    const registryResult = await app.registry.prompt(id, "/repair recheck task-main");
+    const adapterResult = await executor.prompt("/repair recheck task-main");
+    const invalid = await executor.prompt("/repair force task-main");
+    expectOk(await executor.appendNotice!("Workflow host status: human action required."));
+
+    expect(expectError(registryResult).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(adapterResult).message).toContain("Use the host /repair command");
+    expect(expectError(invalid).code).toBe("INVALID_INPUT");
+    expect(requests).toBe(0);
+    expect(
+      expectOk(app.registry.catalog(id, conversation)).items.filter(
+        (item) => item.value === "repair",
+      ),
+    ).toHaveLength(1);
+    const saved = await readFile(executor.sessionFile!, "utf8");
+    expect(saved).toContain('"display":true');
+    expect(saved).toContain("Workflow host status: human action required.");
   } finally {
     await app.cleanup();
   }
@@ -1262,7 +1434,7 @@ test("Extensions consuming input with notices never show fake intermediate runs"
   }
 });
 
-test("Hosted /plan hides its internal request while retaining the displayed command and saved report", async () => {
+test("Legacy /plan --single hides its internal request while retaining the displayed command and saved report", async () => {
   let requests = 0;
   const modelContexts: string[] = [];
   const app = await sdkFixture(false, (options) => ({
@@ -1331,7 +1503,7 @@ test("Hosted /plan hides its internal request while retaining the displayed comm
         unsubscribe();
       }
     };
-    await runPlan("/plan Hosted valid");
+    await runPlan("/plan --single Hosted valid");
     const file = app.registry.sessionFile(id)!;
     const owner = { conversationId: conversation, cwd: app.main.path };
     const before = expectOk(await readTaskPlan(file, owner))!;
@@ -1339,13 +1511,13 @@ test("Hosted /plan hides its internal request while retaining the displayed comm
     const displayed = live.sections ?? [];
     expect(displayed.filter((section) => section.kind === "user")).toMatchObject([
       { text: "/plan", commandName: "plan" },
-      { text: "Hosted valid" },
+      { text: "--single Hosted valid" },
     ]);
     expect(displayed.some((section) => section.title === "radian.task-plan-request")).toBe(false);
     expect(JSON.stringify(displayed)).not.toContain("Read repository instructions");
     expect(live.output).not.toContain("Read repository instructions");
-    expect(live.request?.text).toBe("/plan Hosted valid");
-    expect(live.result?.request?.text).toBe("/plan Hosted valid");
+    expect(live.request?.text).toBe("/plan --single Hosted valid");
+    expect(live.result?.request?.text).toBe("/plan --single Hosted valid");
     expect(modelContexts[0]).toContain("Read repository instructions");
     expect(modelContexts[0]).toContain("User requirements:\\nHosted valid");
     expect(
@@ -1355,7 +1527,7 @@ test("Hosted /plan hides its internal request while retaining the displayed comm
       displayed.some((section) => section.kind === "tool" && section.title === "radian-plan"),
     ).toBe(true);
 
-    await runPlan("/plan Hosted invalid");
+    await runPlan("/plan --single Hosted invalid");
     const after = expectOk(await readTaskPlan(file, owner))!;
     expect(after.hash).toBe(before.hash);
     expect(
@@ -1374,11 +1546,11 @@ test("Hosted /plan hides its internal request while retaining the displayed comm
       app.registry.details(id)?.sections?.filter((section) => section.kind === "user"),
     ).toMatchObject([
       { text: "/plan", commandName: "plan" },
-      { text: "Hosted valid" },
+      { text: "--single Hosted valid" },
       { text: "/plan", commandName: "plan" },
-      { text: "Hosted invalid" },
+      { text: "--single Hosted invalid" },
     ]);
-    expect(app.registry.details(id)?.result?.request?.text).toBe("/plan Hosted invalid");
+    expect(app.registry.details(id)?.result?.request?.text).toBe("/plan --single Hosted invalid");
     expect(
       modelContexts.some((context) => context.includes("User requirements:\\nHosted invalid")),
     ).toBe(true);

@@ -7,12 +7,24 @@ import { planningProposalSchema } from "./planning-proposal.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 256 });
 const message = Type.String({ minLength: 1, maxLength: 16384 });
+export const taskSpawnBindingSchema = Type.Object(
+  {
+    id,
+    role: Type.Enum(["lead", "implementer", "verifier", "worker"]),
+    purpose: Type.Optional(Type.Literal("analysis")),
+    defectId: Type.Optional(id),
+    attemptId: Type.Optional(id),
+  },
+  { additionalProperties: false },
+);
+export type TaskSpawnBinding = Static<typeof taskSpawnBindingSchema>;
 export const subagentCommandSchema = Type.Union([
   Type.Object({ action: Type.Literal("list") }),
   Type.Object({
     action: Type.Literal("spawn"),
     agent: id,
     task: message,
+    binding: Type.Optional(taskSpawnBindingSchema),
     async: Type.Optional(Type.Boolean()),
   }),
   Type.Object({ action: Type.Literal("status"), id: Type.Optional(id) }),
@@ -52,6 +64,7 @@ export function subagentTool(handler?: SubagentHandler<SubagentCommand>) {
         ),
         agent: Type.Optional(id),
         task: Type.Optional(message),
+        binding: Type.Optional(taskSpawnBindingSchema),
         async: Type.Optional(Type.Boolean()),
         id: Type.Optional(id),
         questionId: Type.Optional(id),

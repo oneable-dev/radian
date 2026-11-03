@@ -8,6 +8,12 @@ import { AccountManager } from "../accounts/manager.ts";
 import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import { ChatRuntime } from "./chat-runtime.ts";
 import { expectError, expectOk } from "../testing/results.ts";
+import { ok } from "../result.ts";
+import type { RepairCommand } from "../agents/repair-command.ts";
+import type { ErrorCode } from "../errors.ts";
+import { parseCommand } from "./protocol.ts";
+import { createWorkflowDocument, renderWorkflowStatus } from "../agents/task-workflow.ts";
+import { mutateWorkflow } from "../agents/task-workflow-store.ts";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -24,6 +30,153 @@ async function open() {
   if (!chat.ok) throw chat.error;
   return { chat: chat.value, accounts: accounts.value, directory };
 }
+
+test("Q16 CHAT admits typed and legacy repair commands with matching user provenance only", async () => {
+  // CHAT has no repository, but the same host admission and registry contract still apply.
+  const { chat, accounts } = await open();
+  const sessionId = expectOk(await chat.create());
+  const conversationId = chat.snapshot.details[sessionId]!.conversationId!;
+  const repair = spyOn(chat.registry, "repair").mockResolvedValue(ok("Repair status"));
+  const prompt = spyOn(chat.registry, "prompt").mockResolvedValue(ok(undefined));
+  try {
+    const started = Date.now();
+    const workflowId = "12345678-1234-1234-1234-123456789abc";
+    const cases: readonly (readonly [string, RepairCommand])[] = [
+      ["/repair status", { kind: "status" }],
+      ["/repair recheck x", { kind: "recheck", id: "x" }],
+      ["/repair cancel x", { kind: "cancel", id: "x" }],
+      [`/repair continue ${workflowId}`, { kind: "continue", workflowId }],
+    ];
+
+    // Both additive wire commands and old UI prompt submissions reach the same handler.
+    for (const [text, command] of cases) {
+      expectOk(
+        await chat.command(
+          expectOk(
+            parseCommand(
+              JSON.stringify({
+                type: "task-workflow",
+                sessionId,
+                conversationId,
+                command,
+              }),
+            ),
+          ),
+        ),
+      );
+      expectOk(await chat.command({ type: "prompt", sessionId, conversationId, text }));
+    }
+    expectOk(
+      await chat.command({ type: "prompt", sessionId, conversationId, text: "/repair recheck x" }),
+    );
+
+    expect(repair).toHaveBeenCalledTimes(9);
+    for (const [index, [, command]] of cases.entries()) {
+      for (const call of repair.mock.calls.slice(index * 2, index * 2 + 2)) {
+        expect(call.slice(0, 3)).toEqual([sessionId, conversationId, command]);
+        expect(call[3]).toMatchObject({ kind: "user-command", conversationId });
+        expect(call[3].receivedAt).toBeGreaterThanOrEqual(started);
+        expect(call[3].receivedAt).toBeLessThanOrEqual(Date.now());
+      }
+    }
+    expect(prompt).not.toHaveBeenCalled();
+  } finally {
+    repair.mockRestore();
+    prompt.mockRestore();
+    expectOk(await chat.stop());
+    expectOk(await accounts.stop());
+  }
+});
+
+test("Q16 CHAT repair status appends transcript notices without another model turn", async () => {
+  // Persist a real offline SDK conversation and its workflow before invoking the host command.
+  const { chat, accounts } = await open();
+  try {
+    const sessionId = expectOk(await chat.create());
+    expectOk(await chat.registry.prompt(sessionId, "hello"));
+    const conversationId = chat.snapshot.details[sessionId]!.conversationId!;
+    const sessionFile = chat.registry.sessionFile(sessionId)!;
+    const origin = { conversationId, cwd: homedir(), sessionFile };
+    const doc = createWorkflowDocument(origin, crypto.randomUUID(), Date.now());
+    expectOk(
+      await mutateWorkflow({ originSessionFile: sessionFile }, origin, () =>
+        ok({ doc, effects: [], outcome: { kind: "applied" } }),
+      ),
+    );
+    const before = chat.snapshot.details[sessionId]!.sections!.filter(
+      (section) => section.kind !== "notice",
+    );
+    const prompt = spyOn(chat.registry, "prompt");
+    try {
+      // Both host wire formats return the same text that E2 appends to the displayed transcript.
+      const typed = expectOk(
+        await chat.command({
+          type: "task-workflow",
+          sessionId,
+          conversationId,
+          command: { kind: "status" },
+        }),
+      );
+      const legacy = expectOk(
+        await chat.command({
+          type: "prompt",
+          sessionId,
+          conversationId,
+          text: "/repair status",
+        }),
+      );
+
+      const status = renderWorkflowStatus(doc);
+      expect(typed).toBe(status);
+      expect(legacy).toBe(status);
+      const sections = chat.snapshot.details[sessionId]!.sections!;
+      expect(
+        sections.filter((section) => section.kind === "notice").map((section) => section.text),
+      ).toEqual([status, status]);
+      expect(sections.filter((section) => section.kind !== "notice")).toEqual(before);
+      expect(prompt).not.toHaveBeenCalled();
+    } finally {
+      prompt.mockRestore();
+    }
+  } finally {
+    expectOk(await chat.stop());
+    expectOk(await accounts.stop());
+  }
+});
+
+test("Q16 CHAT rejects repair for stale or closed conversations and malformed legacy input", async () => {
+  // Rejected repair submissions must not become model input in repository-free CHAT.
+  const { chat, accounts } = await open();
+  const sessionId = expectOk(await chat.create());
+  const conversationId = chat.snapshot.details[sessionId]!.conversationId!;
+  const repair = spyOn(chat.registry, "repair").mockResolvedValue(ok("Repair status"));
+  const prompt = spyOn(chat.registry, "prompt").mockResolvedValue(ok(undefined));
+  try {
+    const base = { type: "prompt", sessionId, conversationId, text: "/repair status" } as const;
+
+    for (const [command, code] of [
+      [{ ...base, conversationId: "stale" }, "SESSION_CONFLICT"],
+      [{ type: "prompt", sessionId, text: base.text }, "SESSION_CONFLICT"],
+      [{ ...base, sessionId: "closed" }, "SESSION_NOT_OPEN"],
+      [{ ...base, images: ["/image.png"] }, "INVALID_INPUT"],
+      [{ ...base, text: "/repair cancel" }, "INVALID_INPUT"],
+      [
+        { type: "task-workflow", sessionId, conversationId: "stale", command: { kind: "status" } },
+        "SESSION_CONFLICT",
+      ],
+    ] satisfies readonly (readonly [Parameters<ChatRuntime["command"]>[0], ErrorCode])[]) {
+      expect(expectError(await chat.command(command)).code).toBe(code);
+    }
+
+    expect(repair).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+  } finally {
+    repair.mockRestore();
+    prompt.mockRestore();
+    expectOk(await chat.stop());
+    expectOk(await accounts.stop());
+  }
+});
 
 test("CHAT uses homedir without repository or worktree and resumes a single saved conversation", async () => {
   // Only the daemon's CHAT scope is available; no project catalog or worktree exists.

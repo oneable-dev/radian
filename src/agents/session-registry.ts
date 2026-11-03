@@ -17,6 +17,7 @@ import {
   SessionError,
   CapabilityError,
   DelegationError,
+  WorkflowError,
   reportUnexpected,
   type ExpectedError,
 } from "../errors.ts";
@@ -54,9 +55,59 @@ import {
 import type { ExtensionUiState, ExtensionUiResponse, SessionExtensionUi } from "./extension-ui.ts";
 import { SubagentChannel } from "./subagent-channel.ts";
 import type { OwnedSubagentRecord } from "./subagent-record.ts";
-import type { SubagentCommand, SupervisorCommand } from "./subagent-tools.ts";
+import type { SubagentCommand, SupervisorCommand, TaskSpawnBinding } from "./subagent-tools.ts";
+import type { TaskCommand } from "./task-tool.ts";
 import type { SubagentNotice, SubagentNoticePayload } from "./subagent-notifications.ts";
 import { validatePlanningProposal, type PlanningProposal } from "./planning-proposal.ts";
+import {
+  repairCommand,
+  parseRepairCommand,
+  resolveRepairId,
+  renderRepairStatus,
+  type RepairCommand,
+  type UserCommandProvenance,
+} from "./repair-command.ts";
+import {
+  openWorkflow,
+  mutateWorkflow,
+  writeWorkflowLink,
+  type OpenedWorkflow,
+} from "./task-workflow-store.ts";
+import {
+  createWorkflowDocument,
+  renderWorkflowStatus,
+  renderHumanHandoff,
+  type WorkflowBinding,
+  type WorkflowDocument,
+  type WorkflowPolicyResult,
+} from "./task-workflow.ts";
+import {
+  humanStatus,
+  humanRecheck,
+  humanCancel,
+  addContinuationMember,
+  recoverWorkflow,
+  admitRepair,
+  recordFinding,
+  recordVerdict,
+  submitImplementation,
+  recordAnalysis,
+  publishPlanArtifact,
+  declareScope,
+  declareSubtasks,
+  reassign,
+  continueTask,
+  splitTask,
+  isTaskLead,
+} from "./verification-policy.ts";
+import {
+  TaskRouting,
+  resolveTaskBinding,
+  authorizeTaskBinding,
+  guardImplementation,
+  guardUnboundTask,
+  type TaskRecipient,
+} from "./task-routing.ts";
 
 export type ExecutionState = {
   readonly conversationId?: string;
@@ -111,7 +162,12 @@ export type SessionExecutor = {
     onAccepted?: () => void,
     imagePaths?: readonly string[],
   ): Promise<Result<void, ExpectedError>>;
-  notifySubagent?(event: SubagentNotice, current?: () => boolean): void;
+  notifySubagent?(
+    event: SubagentNotice,
+    current?: () => boolean,
+    delivered?: (accepted?: boolean) => void,
+  ): void;
+  appendNotice?(text: string): Promise<Result<void, ExpectedError>>;
   steer?(message: string): Promise<Result<unknown, ExpectedError>>;
   beforeNewSession?(): Promise<Result<void, ExpectedError>>;
   close(reason?: "quit" | "new"): Promise<Result<void, ExpectedError>>;
@@ -128,12 +184,21 @@ export type SessionContext = {
   readonly agent?: string;
   /** Host-resolved launch profile, frozen at spawn so later edits cannot change this run. */
   readonly profile?: AgentProfile;
-  readonly purpose?: "planning";
+  readonly purpose?: "planning" | "analysis";
+  readonly binding?: WorkflowBinding;
+  /** Revalidate durable write authority for each mutating SDK tool call. */
+  authorizeTool?(toolName: string): Promise<Result<void, ExpectedError>>;
+  coordinateTask?(
+    command: TaskCommand,
+    toolCallId: string,
+    signal?: AbortSignal,
+    knownProfiles?: string[],
+  ): Promise<Result<unknown, ExpectedError>>;
   /** Present for roots and for host-authorized delegating children only. */
   coordinateSubagents?(
     command: SubagentCommand,
     signal?: AbortSignal,
-    purpose?: "planning",
+    purpose?: "planning" | "analysis",
     target?: AgentProfile,
   ): Promise<Result<unknown, ExpectedError>>;
   contactSupervisor?(
@@ -188,11 +253,65 @@ export const delegationLimits = {
   retainedRuns: 128,
 } as const;
 
+type RepairTarget = { readonly defectId: string; readonly attemptId: string };
+
+type FrozenPlanInputs = {
+  boundRevision: number;
+  dependencies: { artifactId: string; revision: number }[];
+  missing: string[];
+};
+
+function capturePlanInputs(doc: WorkflowDocument, taskId: string): FrozenPlanInputs {
+  const dependencies: FrozenPlanInputs["dependencies"] = [];
+  const missing: string[] = [];
+  for (const id of doc.tasks[taskId]!.dependsOn) {
+    const artifactId = doc.tasks[id]?.planArtifact;
+    const latest = artifactId ? doc.artifacts[artifactId]?.revisions.at(-1) : undefined;
+    if (
+      artifactId &&
+      latest?.docRevision !== undefined &&
+      doc.manifest?.declaredRevision !== undefined &&
+      latest.docRevision > doc.manifest.declaredRevision
+    ) {
+      dependencies.push({ artifactId, revision: latest.revision });
+    } else {
+      missing.push(id);
+    }
+  }
+  return { boundRevision: doc.revision, dependencies, missing };
+}
+
+function renderFrozenPlanInputs(
+  doc: WorkflowDocument,
+  taskId: string,
+  inputs: FrozenPlanInputs,
+): string {
+  const lines = [`Frozen inputs for ${taskId} (captured at spawn; respawn to refresh):`];
+  // Reserve space for the retrieval hint even when a large declaration exceeds the budget.
+  for (const { artifactId, revision } of inputs.dependencies) {
+    const artifact = doc.artifacts[artifactId];
+    const item = artifact?.revisions.find((item) => item.revision === revision);
+    lines.push(
+      `  ${artifactId}@${revision} (${artifact?.taskId}): ${(item?.summary ?? "Summary unavailable").replace(/[\r\n]/g, " ").slice(0, 512)}`,
+    );
+  }
+  for (const id of inputs.missing) lines.push(`  ${id}: missing (no current artifact at spawn)`);
+  const text = lines.join("\n");
+  return `${text.length > 7800 ? `${text.slice(0, 7750)}\n[Inputs truncated]` : text}\nRetrieve: radian-task status artifact=<ref@revision>`;
+}
+
 type Execution = {
   readonly id: string;
   readonly name: string;
   readonly role: "main" | "subagent";
-  readonly purpose?: "planning";
+  readonly purpose?: "planning" | "analysis";
+  readonly binding?: WorkflowBinding;
+  readonly repairTarget?: RepairTarget;
+  readonly planInputs?: FrozenPlanInputs;
+  repairClaim?: string;
+  writeClosed?: boolean;
+  submittedRevision?: number;
+  readonly profile?: AgentProfile;
   // Subagent ancestry. Absent on roots; restored legacy records attach to the root.
   owner?: Execution;
   root?: OpenExecution;
@@ -253,6 +372,10 @@ export class SessionRegistry {
   private readonly listeners = new Set<() => void>();
   private readonly fileOwners = new Map<string, string>();
   private readonly retired = new Map<string, SessionRecord>();
+  private readonly taskRouting = new TaskRouting();
+  private readonly startingRuns = new Map<symbol, OpenExecution>();
+  // Single-host claims include pending creation and closing runs, not just model turns.
+  private readonly repairClaims = new Map<string, Execution>();
   private shuttingDown = false;
   private uiActive = false;
   private readonly replacements = new Set<Promise<Result<void, ExpectedError>>>();
@@ -875,6 +998,8 @@ export class SessionRegistry {
             ? "failure"
             : (state?.status ?? child.finishedStatus ?? null),
         ...(child.task !== undefined ? { task: child.task } : {}),
+        ...(child.binding ? { binding: child.binding } : {}),
+        ...(child.purpose ? { purpose: child.purpose } : {}),
         output: state?.output ?? child.output ?? "",
         ...(finalOutput !== undefined ? { finalOutput } : {}),
         ...(child.failure ? { error: child.failure } : {}),
@@ -1127,6 +1252,8 @@ export class SessionRegistry {
               output: saved.output,
               ...(saved.finalOutput !== undefined ? { finalOutput: saved.finalOutput } : {}),
               progress: saved.progress,
+              ...(saved.binding ? { binding: Object.freeze({ ...saved.binding }) } : {}),
+              ...(saved.purpose ? { purpose: saved.purpose } : {}),
               ...(saved.task !== undefined ? { task: saved.task } : {}),
               ...(saved.sessionFile ? { fileKey: saved.sessionFile } : {}),
               ...(saved.error ? { failure: saved.error } : {}),
@@ -1262,6 +1389,8 @@ export class SessionRegistry {
           this.spawnSubagent(id, name, task, signal, generation),
         coordinateSubagents: (command, signal, purpose, target) =>
           this.coordinateSubagents(id, generation, command, signal, purpose, target),
+        coordinateTask: (command, callId, signal, profiles) =>
+          this.coordinateTask(id, generation, undefined, command, callId, signal, profiles),
       }),
     );
     const entry: OpenExecution = {
@@ -1359,10 +1488,750 @@ export class SessionRegistry {
     // Opening History and upgrading old manifests establishes a baseline, not a new notification.
     entry.observedResultId = created.value.state.result?.id;
     entry.unsubscribe = created.value.subscribe(() => this.executionChanged(entry));
-    entry.phase = "open";
+    const workflow = await this.openTaskWorkflow(entry);
+    if (!workflow.ok) return workflow;
+    if (workflow.value) {
+      const recovered = await this.commitTaskWorkflow(entry, workflow.value, (doc) => {
+        // Continuations share the same scope, registry and host process. Pending launches
+        // count too: admission commits before a live Execution reserves its slot.
+        const live = [...this.entries.values()].some((root) =>
+          [...this.descendants(root)].some(
+            (run) => run.binding?.workflowId === doc.workflowId && this.active(run),
+          ),
+        );
+        const starting = [...this.startingRuns.values()].some((root) =>
+          doc.members.some((member) => member.conversationId === root.executor?.savedSessionId),
+        );
+        return live || starting
+          ? ok({ doc, effects: [], outcome: { kind: "duplicate" } })
+          : recoverWorkflow(doc, { eventKey: `recover:${entry.generation}`, at: Date.now() });
+      });
+      if (!recovered.ok) return recovered;
+      entry.phase = "open";
+      const routed = this.routeTaskWorkflow(entry, recovered.value.doc);
+      if (!routed.ok) return routed;
+    } else {
+      entry.phase = "open";
+    }
     this.emit();
 
     return ok(entry.id);
+  }
+
+  private openTaskWorkflow(
+    root: OpenExecution,
+  ): Promise<Result<OpenedWorkflow | null, ExpectedError>> {
+    const executor = root.executor;
+    return executor?.sessionFile
+      ? openWorkflow(root.fileKey ?? executor.sessionFile, {
+          conversationId: executor.savedSessionId,
+          cwd: root.worktree?.path ?? homedir(),
+        })
+      : Promise.resolve(ok(null));
+  }
+
+  private workflowMembers(root: OpenExecution, doc: WorkflowDocument): OpenExecution[] {
+    return [...this.entries.values()].filter(
+      (memberRoot) =>
+        memberRoot.scope.kind === root.scope.kind &&
+        (root.scope.kind === "chat" ||
+          (memberRoot.scope.kind === "code" &&
+            memberRoot.scope.worktreeId === root.scope.worktreeId)) &&
+        doc.members.some(
+          (member) =>
+            member.conversationId === memberRoot.executor?.savedSessionId &&
+            member.sessionFile === memberRoot.fileKey &&
+            member.cwd === (memberRoot.worktree?.path ?? homedir()),
+        ),
+    );
+  }
+
+  private routeTaskWorkflow(
+    root: OpenExecution,
+    doc: WorkflowDocument,
+  ): Result<void, WorkflowError> {
+    const recipients: TaskRecipient[] = [];
+    // Only canonical workflow members in this scope receive observation notices.
+    for (const memberRoot of this.workflowMembers(root, doc)) {
+      const addMember = (node: Execution) => {
+        const executor = node.executor;
+        if (!executor?.notifySubagent) return;
+        if (
+          node !== memberRoot &&
+          (!node.binding || !authorizeTaskBinding(doc, node.binding, node.name).ok)
+        )
+          return;
+        recipients.push({
+          id: `${memberRoot.generation}:${node.id}`,
+          root: node === memberRoot,
+          workflowId: doc.workflowId,
+          ...(node.binding ? { binding: node.binding, profile: node.name } : {}),
+          current: () =>
+            this.ownerCurrent(node, memberRoot, memberRoot.generation) &&
+            (node === memberRoot || !node.settled),
+          notify: (notice, current, delivered) =>
+            executor.notifySubagent!(notice, current, delivered),
+        });
+      };
+      addMember(memberRoot);
+      for (const node of this.descendants(memberRoot)) addMember(node);
+    }
+    return this.taskRouting.redeliver(doc, recipients);
+  }
+
+  private async commitTaskWorkflow(
+    root: OpenExecution,
+    opened: OpenedWorkflow,
+    mutate: (doc: WorkflowDocument) => WorkflowPolicyResult,
+    committed?: (doc: WorkflowDocument) => void,
+  ) {
+    const result = await mutateWorkflow(opened.location, opened.doc.origin, (doc) =>
+      doc ? mutate(doc) : err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared.")),
+    );
+    if (result.ok) {
+      committed?.(result.value.doc);
+      const routed = this.routeTaskWorkflow(root, result.value.doc);
+      if (!routed.ok) return routed;
+    }
+    return result;
+  }
+
+  private async admitTaskRepair(
+    root: OpenExecution,
+    opened: OpenedWorkflow,
+    binding: WorkflowBinding,
+    requested: TaskSpawnBinding,
+    execution: Execution,
+  ): Promise<Result<RepairTarget | undefined, ExpectedError>> {
+    let defectId: string | undefined;
+    const result = await this.commitTaskWorkflow(root, opened, (doc) => {
+      const authorized = authorizeTaskBinding(
+        doc,
+        binding,
+        doc.tasks[binding.taskId]?.implementer?.profile ?? "",
+      );
+      if (!authorized.ok) return authorized;
+      const allowed = guardImplementation(doc, binding.taskId);
+      if (!allowed.ok) return allowed;
+      if (requested.attemptId)
+        return err(
+          new WorkflowError(
+            "WORKFLOW_NOT_AUTHORIZED",
+            "Implementer attempt IDs are assigned by the host admission boundary.",
+          ),
+        );
+      const defects = Object.values(doc.defects).filter(
+        (item) =>
+          item.responsibleTasks.includes(binding.taskId) &&
+          item.state !== "resolved" &&
+          item.state !== "cancelled",
+      );
+      if (!requested.defectId && defects.length > 1)
+        return err(
+          new WorkflowError(
+            "WORKFLOW_CONFLICT",
+            `Choose a binding defectId: ${defects.map((defect) => defect.id).join(", ")}.`,
+          ),
+        );
+      const defect = requested.defectId
+        ? defects.find((defect) => defect.id === requested.defectId)
+        : defects[0];
+      if (requested.defectId && !defect)
+        return err(
+          new WorkflowError(
+            "WORKFLOW_NOT_AUTHORIZED",
+            "Repair target is not an unresolved defect of this task.",
+          ),
+        );
+      if (!defect) return ok({ doc, effects: [], outcome: { kind: "duplicate" } });
+      defectId = defect.id;
+      const active = defect.attempts.find(
+        (attempt) => attempt.status === "authorized" || attempt.status === "submitted",
+      );
+      const admission: WorkflowPolicyResult =
+        active?.status === "authorized" &&
+        active.origin === "automated" &&
+        active.submittedTaskId === binding.taskId
+          ? ok({ doc, effects: [], outcome: { kind: "duplicate", ref: active.id } })
+          : admitRepair(doc, {
+              binding,
+              defectId: defect.id,
+              attemptId: crypto.randomUUID(),
+              eventKey: `admit:${crypto.randomUUID()}`,
+              at: Date.now(),
+            });
+      if (!admission.ok) return admission;
+      const attemptId = admission.value.outcome.ref;
+      if (attemptId) {
+        // This decision and claim run synchronously inside the serialized durable mutation.
+        const key = JSON.stringify([doc.workflowId, defect.id, attemptId]);
+        const holder = this.repairClaims.get(key);
+        if (holder && holder !== execution)
+          return err(
+            new WorkflowError(
+              "WORKFLOW_CONFLICT",
+              `Attempt ${attemptId} is already running in run ${holder.id}`,
+            ),
+          );
+        this.repairClaims.set(key, execution);
+        execution.repairClaim = key;
+      }
+      return admission;
+    });
+    if (!result.ok) return result;
+    return ok(
+      defectId && result.value.outcome.ref
+        ? Object.freeze({ defectId, attemptId: result.value.outcome.ref })
+        : undefined,
+    );
+  }
+
+  private releaseRepairClaim(execution: Execution): void {
+    const key = execution.repairClaim;
+    if (key && this.repairClaims.get(key) === execution) this.repairClaims.delete(key);
+    delete execution.repairClaim;
+  }
+
+  private boundAuthority(execution: Execution): Execution | undefined {
+    for (let node: Execution | undefined = execution; node; node = node.owner)
+      if (node.binding) return node;
+    return undefined;
+  }
+
+  private checkTaskWrite(doc: WorkflowDocument, execution: Execution): Result<void, ExpectedError> {
+    const actor = this.boundAuthority(execution);
+    if (!actor?.binding)
+      return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "No bound write authority."));
+    const binding = actor.binding;
+    const authorized = authorizeTaskBinding(doc, binding, actor.name);
+    if (!authorized.ok) return authorized;
+    if (execution.purpose || actor.purpose || binding.purpose)
+      return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Purpose runs are read-only."));
+    if (actor.writeClosed)
+      return err(
+        new WorkflowError(
+          "WORKFLOW_NOT_AUTHORIZED",
+          "Artifact submitted; a new authorized attempt is required",
+        ),
+      );
+    // QA needs bash for tests. Product-code editing remains a role instruction, not an OS sandbox.
+    if (binding.role === "verifier") return ok(undefined);
+    const allowed = guardImplementation(doc, binding.taskId);
+    if (!allowed.ok) return allowed;
+    if (binding.role !== "implementer") return ok(undefined);
+    if (actor.repairTarget) {
+      const attempt = doc.defects[actor.repairTarget.defectId]?.attempts.find(
+        (item) => item.id === actor.repairTarget!.attemptId,
+      );
+      return attempt?.status === "authorized" &&
+        attempt.origin === "automated" &&
+        attempt.submittedTaskId === binding.taskId &&
+        actor.repairClaim &&
+        this.repairClaims.get(actor.repairClaim) === actor
+        ? ok(undefined)
+        : err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Repair attempt no longer authorizes writes.",
+            ),
+          );
+    }
+    const task = doc.tasks[binding.taskId]!;
+    const unresolved = Object.values(doc.defects).some(
+      (defect) =>
+        defect.responsibleTasks.includes(binding.taskId) &&
+        defect.state !== "resolved" &&
+        defect.state !== "cancelled",
+    );
+    if (
+      unresolved ||
+      (task.verification.state === "awaiting-qa" && actor.submittedRevision !== undefined)
+    )
+      return err(
+        new WorkflowError(
+          "WORKFLOW_NOT_AUTHORIZED",
+          "A new authorized implementation run is required.",
+        ),
+      );
+    return ok(undefined);
+  }
+
+  private async authorizeTaskWrite(
+    execution: Execution,
+    root: OpenExecution,
+    generation: string,
+  ): Promise<Result<void, ExpectedError>> {
+    if (!this.ownerCurrent(execution, root, generation) || execution.closing || execution.settled)
+      return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Run is no longer active."));
+    const opened = await this.openTaskWorkflow(root);
+    if (!opened.ok) return opened;
+    if (!opened.value) return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared."));
+    if (!this.ownerCurrent(execution, root, generation) || execution.closing || execution.settled)
+      return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Run is no longer active."));
+    return this.checkTaskWrite(opened.value.doc, execution);
+  }
+
+  private async coordinateTask(
+    rootId: string,
+    generation: string,
+    node: Execution | undefined,
+    command: TaskCommand,
+    callId: string,
+    signal?: AbortSignal,
+    knownProfiles: string[] = [],
+  ): Promise<Result<unknown, ExpectedError>> {
+    const selected = this.requireOpen(rootId);
+    if (!selected.ok) return selected;
+    const root = selected.value;
+    const actor = node ?? root;
+    if (signal?.aborted || !this.ownerCurrent(actor, root, generation))
+      return err(new CancelledError());
+    const opened = await this.openTaskWorkflow(root);
+    if (!opened.ok) return opened;
+    // This provenance is host-owned model authority, never user-command authority.
+    const provenance = { kind: "root-model" as const, runId: actor.id };
+    const event = { eventKey: `${provenance.runId}:${callId}`, at: Date.now() };
+    const binding = actor.binding;
+    const isRoot = actor === root;
+    const authorize = (doc: WorkflowDocument): Result<void, WorkflowError> => {
+      if (isRoot) return ok(undefined);
+      return binding
+        ? authorizeTaskBinding(doc, binding, actor.name)
+        : err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Only roots and bound runs may use radian-task.",
+            ),
+          );
+    };
+    if (!root.executor?.sessionFile || (!opened.value && !(isRoot && command.action === "declare")))
+      return err(new WorkflowError("WORKFLOW_NOT_FOUND", "This conversation has no workflow."));
+    if (command.action === "status") {
+      const doc = opened.value!.doc;
+      const authorized = authorize(doc);
+      if (!authorized.ok) return authorized;
+      if (command.detail === "handoff") {
+        const defect = command.id ? doc.defects[command.id] : undefined;
+        if (!defect)
+          return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Handoff requires a defect ID."));
+        if (
+          !isRoot &&
+          (!binding || !defect.responsibleTasks.some((id) => isTaskLead(doc, binding, id)))
+        )
+          return err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Only a responsible lead/root may request this handoff.",
+            ),
+          );
+        return renderHumanHandoff(doc, defect.id);
+      }
+      if (command.artifact) {
+        const [artifactId, revision] = command.artifact.split("@");
+        const artifact = artifactId ? doc.artifacts[artifactId] : undefined;
+        const denied = () =>
+          err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Only the owning lead/root or a dependent run with this frozen input revision may request this artifact.",
+            ),
+          );
+        if (!artifact) return denied();
+        const ownsArtifact = isRoot || (binding && isTaskLead(doc, binding, artifact.taskId));
+        if (!ownsArtifact) {
+          const inputs = actor.planInputs;
+          const task = binding ? doc.tasks[binding.taskId] : undefined;
+          const frozenInput =
+            artifact &&
+            task &&
+            inputs &&
+            !!revision &&
+            !/\D/.test(revision) &&
+            command.artifact === `${artifactId}@${revision}` &&
+            inputs.dependencies.some(
+              (input) => input.artifactId === artifactId && input.revision === Number(revision),
+            ) &&
+            task.dependsOn.includes(artifact.taskId);
+          if (!frozenInput) return denied();
+          if (task.declaredRevision !== undefined && inputs.boundRevision < task.declaredRevision)
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Binding predates the current declaration; respawn the lead.",
+              ),
+            );
+        }
+        const item = revision
+          ? artifact.revisions.find((item) => item.revision === Number(revision))
+          : artifact.revisions.at(-1);
+        return item
+          ? ok(item.body)
+          : err(new WorkflowError("WORKFLOW_NOT_FOUND", "Artifact revision not found."));
+      }
+      const status = renderWorkflowStatus(doc, command.id).slice(0, 16000);
+      if (
+        !isRoot &&
+        binding &&
+        actor.planInputs &&
+        (!command.id || command.id === binding.taskId)
+      ) {
+        const frozen = renderFrozenPlanInputs(doc, binding.taskId, actor.planInputs);
+        return ok(`${status.slice(0, 16000 - frozen.length - 2)}\n\n${frozen}`);
+      }
+      return ok(status);
+    }
+    const mutate = (doc: WorkflowDocument): WorkflowPolicyResult => {
+      const authorized = authorize(doc);
+      if (!authorized.ok) return authorized;
+      if (actor.purpose && !["analysis", "publish-plan"].includes(command.action))
+        return err(
+          new WorkflowError(
+            "WORKFLOW_NOT_AUTHORIZED",
+            "Read-only runs may only inspect status and publish plans or analysis.",
+          ),
+        );
+      const denied = () =>
+        err(
+          new WorkflowError(
+            "WORKFLOW_NOT_AUTHORIZED",
+            "This action requires the current task role or owning lead/root.",
+          ),
+        );
+      const owns = (taskId: string) => isRoot || (binding && isTaskLead(doc, binding, taskId));
+      switch (command.action) {
+        case "finding":
+          return binding?.role === "verifier"
+            ? recordFinding(doc, { ...command, ...event, binding })
+            : denied();
+        case "verdict": {
+          if (binding?.role !== "verifier") return denied();
+          const target = actor.repairTarget;
+          if (
+            target &&
+            ((command.defectId && command.defectId !== target.defectId) ||
+              (command.attemptId && command.attemptId !== target.attemptId))
+          )
+            return denied();
+          return recordVerdict(doc, { ...command, ...target, ...event, binding });
+        }
+        case "submit": {
+          if (binding?.role !== "implementer") return denied();
+          if (actor.writeClosed)
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Artifact submitted; a new authorized attempt is required",
+              ),
+            );
+          const allowed = guardImplementation(doc, binding.taskId);
+          if (!allowed.ok) return allowed;
+          const target = actor.repairTarget;
+          if (
+            (target &&
+              ((command.defectId && command.defectId !== target.defectId) ||
+                (command.attemptId && command.attemptId !== target.attemptId))) ||
+            (!target && (command.defectId || command.attemptId))
+          )
+            return denied();
+          return submitImplementation(doc, { ...command, ...target, ...event, binding });
+        }
+        case "analysis":
+          return binding?.role === "lead"
+            ? recordAnalysis(doc, { ...command, ...event, binding })
+            : denied();
+        case "publish-plan": {
+          const task = binding ? doc.tasks[binding.taskId] : undefined;
+          if (
+            task?.declaredRevision !== undefined &&
+            (actor.planInputs?.boundRevision ?? -1) < task.declaredRevision
+          )
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Binding predates the current declaration; respawn the lead.",
+              ),
+            );
+          return binding?.role === "lead"
+            ? publishPlanArtifact(doc, {
+                ...command,
+                ...event,
+                binding,
+                author: { runId: actor.id, profile: actor.name, role: binding.role },
+                ...(actor.planInputs
+                  ? { reviewedDependencies: actor.planInputs.dependencies }
+                  : {}),
+              })
+            : denied();
+        }
+        case "declare":
+          return isRoot ? declareScope(doc, { ...command, ...event, knownProfiles }) : denied();
+        case "assign":
+          return owns(command.parentTaskId)
+            ? declareSubtasks(doc, {
+                ...event,
+                parentTaskId: command.parentTaskId,
+                subtasks: command.tasks,
+                knownProfiles,
+                ...(!isRoot && binding ? { binding } : {}),
+              })
+            : denied();
+        case "reassign": {
+          if (!owns(command.taskId)) return denied();
+          if (!knownProfiles.includes(command.profile))
+            return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Unknown assigned profile."));
+          return reassign(doc, { ...command, ...event });
+        }
+        case "continue":
+        case "split": {
+          if (!owns(command.taskId)) return denied();
+          if (
+            [command.task.lead, command.task.implementer, command.task.verifier].some(
+              (profile) => profile && !knownProfiles.includes(profile.profile),
+            )
+          )
+            return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Unknown assigned profile."));
+          return (command.action === "continue" ? continueTask : splitTask)(doc, {
+            ...command,
+            ...event,
+          });
+        }
+      }
+    };
+    const result = opened.value
+      ? await this.commitTaskWorkflow(root, opened.value, mutate, (doc) => {
+          if (command.action === "submit" && binding?.role === "implementer") {
+            // Close before notification delivery: a routing failure cannot reopen accepted writes.
+            actor.writeClosed = true;
+            actor.submittedRevision = doc.tasks[binding.taskId]!.artifactRevision;
+          }
+        })
+      : await mutateWorkflow(
+          { originSessionFile: root.executor!.sessionFile! },
+          { conversationId: root.executor!.savedSessionId, cwd: root.worktree?.path ?? homedir() },
+          (doc) =>
+            mutate(
+              doc ??
+                createWorkflowDocument(
+                  {
+                    conversationId: root.executor!.savedSessionId,
+                    cwd: root.worktree?.path ?? homedir(),
+                    sessionFile: root.executor!.sessionFile!,
+                  },
+                  crypto.randomUUID(),
+                  event.at,
+                ),
+            ),
+        );
+    if (!result.ok) return result;
+    if (command.action === "publish-plan") {
+      const artifact = result.value.doc.artifacts[command.artifactId]?.revisions.at(-1);
+      return ok({
+        ref: result.value.outcome.ref,
+        goal: command.plan.goal.slice(0, 512),
+        taskCount: command.plan.tasks.length,
+        deps: result.value.doc.tasks[binding!.taskId]!.dependsOn,
+        warnings: command.review.warnings,
+        summary: artifact?.summary,
+      });
+    }
+    return ok({
+      ...result.value.outcome,
+      status: renderWorkflowStatus(result.value.doc, binding?.taskId).slice(0, 12000),
+    });
+  }
+
+  async repair(
+    sessionId: string,
+    conversationId: string,
+    command: RepairCommand,
+    provenance: UserCommandProvenance,
+  ): Promise<Result<string, ExpectedError>> {
+    const selected = this.modelOwner(sessionId, conversationId);
+    if (!selected.ok) return selected;
+    const entry = selected.value;
+    if (provenance.kind !== "user-command" || provenance.conversationId !== conversationId)
+      return err(
+        new WorkflowError(
+          "WORKFLOW_NOT_AUTHORIZED",
+          "Repair requires direct user-command provenance for this conversation.",
+        ),
+      );
+    const executor = entry.executor!;
+    if (!executor.sessionFile)
+      return err(new WorkflowError("WORKFLOW_NOT_FOUND", "This conversation has no workflow."));
+    const opened = await this.openTaskWorkflow(entry);
+    if (!opened.ok) return opened;
+    const event = {
+      eventKey: `user:${conversationId}:${provenance.receivedAt}:${command.kind}:${"id" in command ? (command.id ?? "") : ""}:${crypto.randomUUID()}`,
+      at: provenance.receivedAt,
+    };
+    let doc: WorkflowDocument;
+    let notice: string | undefined;
+    if (command.kind === "continue") {
+      if (opened.value && opened.value.doc.workflowId !== command.workflowId)
+        return err(
+          new WorkflowError(
+            "WORKFLOW_CONFLICT",
+            "This conversation already belongs to another workflow.",
+          ),
+        );
+      let source = opened.value;
+      const candidates = [...this.entries.values()]
+        .filter(
+          (candidate) =>
+            candidate !== entry &&
+            candidate.phase === "open" &&
+            candidate.scope.kind === entry.scope.kind &&
+            (entry.scope.kind === "chat" ||
+              (candidate.scope.kind === "code" &&
+                candidate.scope.worktreeId === entry.scope.worktreeId)),
+        )
+        .map((candidate) => ({
+          sessionFile: candidate.executor?.sessionFile,
+          conversationId: candidate.executor?.savedSessionId,
+          cwd: candidate.worktree?.path ?? homedir(),
+        }));
+      for (const record of this.retired.values()) {
+        if (
+          (record.scope?.kind ?? "code") !== entry.scope.kind ||
+          (entry.scope.kind === "code" && record.worktreeId !== entry.scope.worktreeId)
+        )
+          continue;
+        candidates.push({
+          sessionFile: record.sessionFile,
+          conversationId: record.state.conversationId,
+          cwd: record.cwd ?? homedir(),
+        });
+      }
+      for (const candidate of candidates) {
+        if (!candidate.sessionFile || !candidate.conversationId) continue;
+        const found = await openWorkflow(candidate.sessionFile, {
+          conversationId: candidate.conversationId,
+          cwd: candidate.cwd,
+        });
+        if (!found.ok) return found;
+        if (
+          found.value &&
+          found.value.doc.workflowId !== command.workflowId &&
+          found.value.doc.members.some(
+            (member) =>
+              member.conversationId === conversationId || member.sessionFile === entry.fileKey,
+          )
+        )
+          return err(
+            new WorkflowError(
+              "WORKFLOW_CONFLICT",
+              "This conversation is already a member of another workflow.",
+            ),
+          );
+        if (found.value?.doc.workflowId === command.workflowId) source = found.value;
+      }
+      if (!source)
+        return err(
+          new WorkflowError(
+            "WORKFLOW_NOT_FOUND",
+            "Workflow not found among known conversations in this scope.",
+          ),
+        );
+      const member = {
+        conversationId,
+        cwd: entry.worktree?.path ?? homedir(),
+        sessionFile: entry.fileKey ?? executor.sessionFile,
+      };
+      const joined = await this.commitTaskWorkflow(entry, source, (current) =>
+        addContinuationMember(current, { ...event, provenance, member }),
+      );
+      if (!joined.ok) return joined;
+      const linked = await writeWorkflowLink(
+        member.sessionFile,
+        member,
+        source.location,
+        source.doc.origin,
+      );
+      if (!linked.ok) return linked;
+      doc = joined.value.doc;
+      notice = `Continued workflow ${doc.workflowId}.`;
+    } else {
+      if (!opened.value)
+        return err(new WorkflowError("WORKFLOW_NOT_FOUND", "This conversation has no workflow."));
+      const authorized = humanStatus(opened.value.doc, provenance);
+      if (!authorized.ok) return authorized;
+      const resolved = command.id ? resolveRepairId(authorized.value, command.id) : ok(undefined);
+      if (!resolved.ok) return resolved;
+      doc = authorized.value;
+      if (command.kind !== "status") {
+        const id = resolved.value!;
+        const changed = await this.commitTaskWorkflow(entry, opened.value, (current) =>
+          command.kind === "recheck"
+            ? humanRecheck(current, {
+                ...event,
+                id,
+                provenance,
+                attemptId: crypto.randomUUID(),
+              })
+            : humanCancel(current, { ...event, id, provenance }),
+        );
+        if (!changed.ok) return changed;
+        doc = changed.value.doc;
+        if (command.kind === "cancel") {
+          const isTask = !!doc.tasks[id];
+          const taskIds = isTask ? [id] : (doc.defects[id]?.responsibleTasks ?? []);
+          const retained: string[] = [];
+          const stopWarnings: string[] = [];
+          const runs = this.workflowMembers(entry, doc).flatMap((root) => [
+            ...this.descendants(root),
+          ]);
+          for (const run of runs)
+            if (
+              this.active(run) &&
+              run.binding?.workflowId === doc.workflowId &&
+              (isTask ? run.binding.taskId === id : run.repairTarget?.defectId === id)
+            ) {
+              const otherTasks = [
+                ...new Set(
+                  [...this.descendants(run)]
+                    .filter(
+                      (child) =>
+                        this.active(child) &&
+                        child.binding &&
+                        !taskIds.includes(child.binding.taskId),
+                    )
+                    .map((child) => child.binding!.taskId),
+                ),
+              ];
+              if (otherTasks.length) {
+                retained.push(
+                  `Run ${run.id} not stopped: it owns active runs for tasks ${otherTasks.join(", ")}; its authority for ${run.binding.taskId} is revoked. Cancel those tasks or stop it from its owner.`,
+                );
+                continue;
+              }
+              const stopped = await this.closeExecution(run);
+              if (!stopped.ok)
+                stopWarnings.push(
+                  `[${stopped.error.code}] run ${run.id} could not be stopped: ${stopped.error.message}`,
+                );
+            }
+          notice = [
+            "Cancel recorded. Accepted edits are not rolled back.",
+            ...retained,
+            ...stopWarnings,
+          ].join("\n");
+        } else {
+          const taskId = doc.tasks[id] ? id : doc.defects[id]!.responsibleTasks[0]!;
+          notice = `QA recheck of revision ${doc.tasks[taskId]!.artifactRevision} is required for ${taskId}.`;
+        }
+      }
+      const status = renderRepairStatus(doc, resolved.value);
+      if (!status.ok) return status;
+      notice = `${notice ? notice + "\n" : ""}${status.value}`;
+    }
+    const text = (notice ?? renderWorkflowStatus(doc)).slice(0, 60000);
+    const appended = await executor.appendNotice?.(text);
+    return ok(
+      appended && !appended.ok
+        ? `${text}\n[${appended.error.code}] The host action was accepted, but displaying its transcript notice could not be confirmed.`
+        : text,
+    );
   }
 
   async complete(
@@ -1435,6 +2304,7 @@ export class SessionRegistry {
       }),
       ...(executor.models && executor.selectModel ? [modelCommand] : []),
       historyCommand,
+      repairCommand,
       dashboardCommand,
       accountsCommand,
     ];
@@ -1553,6 +2423,10 @@ export class SessionRegistry {
     onAccepted?: () => void,
     imagePaths: readonly string[] = [],
   ): Promise<Result<void, ExpectedError>> {
+    const repair = parseRepairCommand(text);
+    if (!repair.ok) return repair;
+    if (repair.value)
+      return err(new CapabilityError("Use the host /repair command. No model prompt was sent."));
     const dashboard = parseDashboardCommand(text);
     if (!dashboard.ok) {
       return dashboard;
@@ -2087,7 +2961,7 @@ export class SessionRegistry {
     generation: string,
     command: SubagentCommand,
     signal?: AbortSignal,
-    purpose?: "planning",
+    purpose?: "planning" | "analysis",
     target?: AgentProfile,
   ): Promise<Result<unknown, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
@@ -2108,7 +2982,7 @@ export class SessionRegistry {
     generation: string,
     command: SubagentCommand,
     signal?: AbortSignal,
-    purpose?: "planning",
+    purpose?: "planning" | "analysis",
     target?: AgentProfile,
   ): Promise<Result<unknown, ExpectedError>> {
     if (signal?.aborted) return err(new CancelledError());
@@ -2116,32 +2990,30 @@ export class SessionRegistry {
       return err(new CancelledError("This owner can no longer coordinate subagents."));
     if (command.action === "list")
       return err(new CapabilityError("Profile discovery belongs to the session resource loader."));
+    if (node.binding && ["spawn", "steer", "reply"].includes(command.action)) {
+      const workflow = await this.openTaskWorkflow(root);
+      if (!workflow.ok) return workflow;
+      if (!workflow.value)
+        return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Bound workflow is unavailable."));
+      const allowed = authorizeTaskBinding(workflow.value.doc, node.binding, node.name);
+      if (!allowed.ok) return allowed;
+    }
     const owned = this.ownedBy(node);
     if (command.action === "spawn") {
       if (target && target.name !== command.agent)
         return err(new InputError("The resolved agent profile does not match the request."));
-      if (command.async === false && target?.delegation?.enabled === true)
-        return err(
-          new CapabilityError(
-            "Delegating agents run asynchronously only. Spawn without async: false and wait.",
-          ),
-        );
-      if (command.async === false && [...owned.values()].some((child) => this.active(child)))
-        return err(
-          new CapabilityError(
-            "Use asynchronous spawn while other owned runs are active so questions can be answered.",
-          ),
-        );
       const background = command.async !== false;
       let childId: string | undefined;
       const result = await this.spawnChild(node, root, generation, command.agent, command.task, {
         ...(signal ? { signal } : {}),
         background,
+        requireSynchronous: command.async === false,
         onCreated: (id) => {
           childId = id;
         },
         ...(purpose ? { purpose } : {}),
         ...(target ? { profile: target } : {}),
+        ...(command.binding ? { requestedBinding: command.binding } : {}),
       });
       return result.ok ? ok(this.childStatus(owned.get(childId!)!, true, purpose)) : result;
     }
@@ -2192,6 +3064,19 @@ export class SessionRegistry {
       );
     }
     const child = runs[0]!;
+    if (
+      (command.action === "reply" || command.action === "steer") &&
+      child.binding?.role === "implementer"
+    ) {
+      const workflow = await this.openTaskWorkflow(root);
+      if (!workflow.ok) return workflow;
+      if (!workflow.value)
+        return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Bound workflow is unavailable."));
+      const authorized = authorizeTaskBinding(workflow.value.doc, child.binding, child.name);
+      if (!authorized.ok) return authorized;
+      const allowed = guardImplementation(workflow.value.doc, child.binding.taskId);
+      if (!allowed.ok) return allowed;
+    }
     if (command.action === "reply")
       return (
         child.channel?.reply(command.questionId, command.message) ??
@@ -2211,7 +3096,7 @@ export class SessionRegistry {
     return child.executor.steer(command.message);
   }
 
-  private childStatus(child: Execution, detail = true, purpose?: "planning"): unknown {
+  private childStatus(child: Execution, detail = true, purpose?: "planning" | "analysis"): unknown {
     const state = child.executor?.state;
     child.observedNoticeVersion = child.noticeVersion ?? 0;
     if (!this.active(child)) child.terminalObserved = true;
@@ -2221,6 +3106,8 @@ export class SessionRegistry {
     return {
       id: child.id,
       agent: child.name,
+      ...(child.binding ? { binding: child.binding } : {}),
+      ...(child.repairTarget ? { repairTarget: child.repairTarget } : {}),
       task: (child.task ?? child.request?.text)?.slice(0, detail ? 16_384 : 400),
       status: this.active(child)
         ? child.channel?.questions.length
@@ -2304,216 +3191,402 @@ export class SessionRegistry {
     generation: string,
     name: string,
     task: string,
+    options: Parameters<SessionRegistry["launchChild"]>[5],
+  ): Promise<Result<string, ExpectedError>> {
+    const token = Symbol();
+    this.startingRuns.set(token, root);
+    try {
+      return await this.launchChild(owner, root, generation, name, task, options);
+    } finally {
+      this.startingRuns.delete(token);
+    }
+  }
+
+  private async launchChild(
+    owner: Execution,
+    root: OpenExecution,
+    generation: string,
+    name: string,
+    task: string,
     options: {
       readonly signal?: AbortSignal;
       readonly background?: boolean;
       readonly onCreated?: (id: string) => void;
-      readonly purpose?: "planning";
+      readonly purpose?: "planning" | "analysis";
       readonly profile?: AgentProfile;
+      readonly requestedBinding?: TaskSpawnBinding;
+      readonly requireSynchronous?: boolean;
     },
   ): Promise<Result<string, ExpectedError>> {
-    const { signal, background = false, onCreated, purpose, profile } = options;
-    if (signal?.aborted) return err(new CancelledError());
-    if (!this.ownerCurrent(owner, root, generation))
-      return err(new CancelledError("This owner can no longer start subagents."));
-    const depth = (owner === root ? 0 : (owner.depth ?? 1)) + 1;
-    if (depth > delegationLimits.maxDepth)
-      return err(
-        new DelegationError(
-          "DELEGATION_DEPTH_EXCEEDED",
-          `Delegation is limited to ${delegationLimits.maxDepth} levels below the root. Do this work directly or return it to your owner.`,
-        ),
-      );
-    const tree = [...this.descendants(root)];
-    if (tree.filter((node) => this.active(node)).length >= delegationLimits.activeDescendants)
-      return err(
-        new DelegationError(
-          "DELEGATION_CAPACITY_EXCEEDED",
-          `This conversation already has ${delegationLimits.activeDescendants} active subagents across its run tree. Wait for or stop a run first; nothing was queued.`,
-        ),
-      );
-    if (tree.length >= delegationLimits.retainedRuns)
-      return err(
-        new DelegationError(
-          "DELEGATION_RETENTION_EXCEEDED",
-          "This conversation has reached its retained-run limit. Start a new conversation.",
-        ),
-      );
-
-    const owned = this.ownedBy(owner);
-    // Planning runs are proposal-only leaves regardless of profile metadata.
-    const delegating = purpose !== "planning" && profile?.delegation?.enabled === true;
+    const { signal, background = false, onCreated, profile } = options;
     const child: Execution = {
       id: crypto.randomUUID(),
       name,
       task,
       role: "subagent",
-      ...(purpose ? { purpose } : {}),
+      ...(profile ? { profile } : {}),
       owner,
       root,
-      depth,
-      ...(delegating ? { delegating: true, children: new Map() } : {}),
       ready: undefined,
       controller: new AbortController(),
       ...(root.worktree ? { worktree: root.worktree } : {}),
       managed: true,
       request: summarizeRequest(task, 0),
     };
-    child.channel = new SubagentChannel((event) => {
-      if (event.type !== "question-settled" && owner === root) this.notifyChild(root, child, event);
-      this.emit();
-    });
-    const ready = capture(() =>
-      this.factory({
-        cwd: root.worktree?.path ?? homedir(),
-        scope: root.scope,
-        ...(root.scope.kind === "code" ? { worktreeId: root.scope.worktreeId } : {}),
-        role: "subagent",
-        agent: name,
-        ...(profile ? { profile } : {}),
-        ...(purpose ? { purpose } : {}),
-        contactSupervisor: (command, childSignal) => {
-          if (
-            !this.ownerCurrent(owner, root, generation) ||
-            child.controller!.signal.aborted ||
-            childSignal?.aborted
-          )
-            return Promise.resolve(err(new CancelledError()));
-          if (command.action === "proposal") {
-            if (purpose !== "planning")
-              return Promise.resolve(
-                err(new CapabilityError("Only a planning run may return a plan proposal.")),
-              );
-            const proposal = validatePlanningProposal(command.proposal);
-            if (!proposal.ok) return Promise.resolve(proposal);
-            child.planningProposal = structuredClone(proposal.value);
-            return Promise.resolve(ok({ recorded: true }));
-          }
-          if (!background && command.action === "ask")
-            return Promise.resolve(
-              err(
-                new CapabilityError(
-                  "A synchronous parent cannot answer questions. Use asynchronous spawn.",
-                ),
+    try {
+      let purpose = owner.purpose ?? options.requestedBinding?.purpose ?? options.purpose;
+      if (signal?.aborted) return err(new CancelledError());
+      if (!this.ownerCurrent(owner, root, generation))
+        return err(new CancelledError("This owner can no longer start subagents."));
+      const depth = (owner === root ? 0 : (owner.depth ?? 1)) + 1;
+      if (depth > delegationLimits.maxDepth)
+        return err(
+          new DelegationError(
+            "DELEGATION_DEPTH_EXCEEDED",
+            `Delegation is limited to ${delegationLimits.maxDepth} levels below the root. Do this work directly or return it to your owner.`,
+          ),
+        );
+      // Durable admission precedes capacity reservation. An authorized attempt is reusable
+      // when capacity is temporarily full; it is not a second repair attempt.
+      let binding: WorkflowBinding | undefined;
+      let repairTarget: RepairTarget | undefined;
+      const workflow = root.executor?.sessionFile ? await this.openTaskWorkflow(root) : ok(null);
+      if (!workflow.ok) return workflow;
+      if (options.requestedBinding) {
+        if (!workflow.value)
+          return err(new WorkflowError("WORKFLOW_NOT_FOUND", "This conversation has no workflow."));
+        const resolved = resolveTaskBinding(
+          workflow.value.doc,
+          { ...options.requestedBinding, ...(purpose ? { purpose } : {}) },
+          name,
+          owner === root
+            ? { kind: "root" }
+            : owner.binding
+              ? { kind: "bound", binding: owner.binding, profile: owner.name }
+              : { kind: "unbound" },
+        );
+        if (!resolved.ok) return resolved;
+        binding = Object.freeze({ ...resolved.value, ...(purpose ? { purpose } : {}) });
+        if (binding.role === "lead" || binding.role === "verifier")
+          Object.assign(child, {
+            planInputs: capturePlanInputs(workflow.value.doc, binding.taskId),
+          });
+        if (binding.role === "implementer") {
+          const admitted = await this.admitTaskRepair(
+            root,
+            workflow.value,
+            binding,
+            options.requestedBinding,
+            child,
+          );
+          if (!admitted.ok) return admitted;
+          repairTarget = admitted.value;
+        } else if (binding.role === "verifier" && options.requestedBinding.defectId) {
+          const defect = workflow.value.doc.defects[options.requestedBinding.defectId];
+          const attempt = defect?.attempts.find(
+            (attempt) =>
+              attempt.submittedTaskId === binding!.taskId &&
+              (options.requestedBinding!.attemptId
+                ? attempt.id === options.requestedBinding!.attemptId
+                : attempt.status === "submitted"),
+          );
+          if (!defect?.responsibleTasks.includes(binding.taskId) || !attempt)
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Verifier target does not belong to this task's submitted attempt.",
               ),
             );
-          return child.channel!.contact(command, childSignal);
-        },
-        ...(delegating
-          ? {
-              // Host-owned: a child can neither choose a purpose nor reach another owner's runs.
-              coordinateSubagents: (command, childSignal, childPurpose, target) =>
-                childPurpose
-                  ? Promise.resolve(
-                      err(new CapabilityError("Only the root may start purpose-specific runs.")),
-                    )
-                  : this.coordinate(
-                      child,
-                      root,
-                      generation,
-                      command,
-                      childSignal,
-                      undefined,
-                      target,
-                    ),
-              spawnSubagent: (agent, childTask, childSignal) =>
-                this.spawnChild(
-                  child,
-                  root,
-                  generation,
-                  agent,
-                  childTask,
-                  childSignal ? { signal: childSignal } : {},
-                ),
+          repairTarget = Object.freeze({ defectId: defect.id, attemptId: attempt.id });
+        } else if (options.requestedBinding.defectId || options.requestedBinding.attemptId) {
+          return err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Repair targets require an implementer or verifier defect binding.",
+            ),
+          );
+        }
+      } else if (workflow.value && !purpose) {
+        const allowed = guardUnboundTask(workflow.value.doc, task);
+        if (!allowed.ok) return allowed;
+      }
+      if (binding?.purpose) purpose = binding.purpose;
+      if (signal?.aborted || !this.ownerCurrent(owner, root, generation))
+        return err(new CancelledError());
+      if (options.requireSynchronous && profile?.delegation?.enabled)
+        return err(
+          new CapabilityError(
+            "Delegating agents run asynchronously only. Spawn without async: false and wait.",
+          ),
+        );
+      if (
+        options.requireSynchronous &&
+        [...this.ownedBy(owner).values()].some((child) => this.active(child))
+      )
+        return err(
+          new CapabilityError(
+            "Use asynchronous spawn while other owned runs are active so questions can be answered.",
+          ),
+        );
+      // Reopen after asynchronous admission: assignments and locks may have changed.
+      if (binding) {
+        const current = await this.openTaskWorkflow(root);
+        if (!current.ok) return current;
+        if (!current.value)
+          return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared."));
+        const resolved = resolveTaskBinding(
+          current.value.doc,
+          { ...options.requestedBinding!, ...(purpose ? { purpose } : {}) },
+          name,
+          owner === root
+            ? { kind: "root" }
+            : owner.binding
+              ? { kind: "bound", binding: owner.binding, profile: owner.name }
+              : { kind: "unbound" },
+        );
+        if (!resolved.ok) return resolved;
+        const authorized = authorizeTaskBinding(current.value.doc, binding, name);
+        if (!authorized.ok) return authorized;
+        if (repairTarget && binding.role === "implementer") {
+          const attempt = current.value.doc.defects[repairTarget.defectId]?.attempts.find(
+            (item) => item.id === repairTarget!.attemptId,
+          );
+          if (attempt?.status !== "authorized")
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Repair attempt no longer authorizes a launch.",
+              ),
+            );
+          const allowed = guardImplementation(current.value.doc, binding.taskId);
+          if (!allowed.ok) return allowed;
+        }
+      }
+      if (signal?.aborted || !this.ownerCurrent(owner, root, generation))
+        return err(new CancelledError());
+      // Recheck capacity in the same synchronous section as the actual reservation.
+      if (
+        [...this.descendants(root)].filter((node) => this.active(node)).length >=
+        delegationLimits.activeDescendants
+      )
+        return err(
+          new DelegationError(
+            "DELEGATION_CAPACITY_EXCEEDED",
+            `This conversation already has ${delegationLimits.activeDescendants} active subagents across its run tree. Wait for or stop a run first; nothing was queued.`,
+          ),
+        );
+      if ([...this.descendants(root)].length >= delegationLimits.retainedRuns)
+        return err(
+          new DelegationError(
+            "DELEGATION_RETENTION_EXCEEDED",
+            "This conversation has reached its retained-run limit. Start a new conversation.",
+          ),
+        );
+      const owned = this.ownedBy(owner);
+      const delegating = profile?.delegation?.enabled === true;
+      Object.assign(child, {
+        ...(purpose ? { purpose } : {}),
+        ...(binding ? { binding } : {}),
+        ...(repairTarget ? { repairTarget } : {}),
+        depth,
+        ...(delegating ? { delegating: true, children: new Map<string, Execution>() } : {}),
+      } satisfies Partial<Execution>);
+      child.channel = new SubagentChannel((event) => {
+        if (event.type !== "question-settled" && owner === root)
+          this.notifyChild(root, child, event);
+        this.emit();
+      });
+      const ready = capture(() =>
+        this.factory({
+          cwd: root.worktree?.path ?? homedir(),
+          scope: root.scope,
+          ...(root.scope.kind === "code" ? { worktreeId: root.scope.worktreeId } : {}),
+          role: "subagent",
+          agent: name,
+          ...(profile ? { profile } : {}),
+          ...(purpose ? { purpose } : {}),
+          ...(this.boundAuthority(child)
+            ? {
+                authorizeTool: (_toolName: string) =>
+                  this.authorizeTaskWrite(child, root, generation),
+              }
+            : {}),
+          ...(binding
+            ? {
+                binding,
+                coordinateTask: (
+                  command: TaskCommand,
+                  callId: string,
+                  taskSignal?: AbortSignal,
+                  profiles?: string[],
+                ) =>
+                  this.coordinateTask(
+                    root.id,
+                    generation,
+                    child,
+                    command,
+                    callId,
+                    taskSignal,
+                    profiles,
+                  ),
+              }
+            : {}),
+          contactSupervisor: (command, childSignal) => {
+            if (
+              !this.ownerCurrent(owner, root, generation) ||
+              child.controller!.signal.aborted ||
+              childSignal?.aborted
+            )
+              return Promise.resolve(err(new CancelledError()));
+            if (command.action === "proposal") {
+              if (purpose !== "planning")
+                return Promise.resolve(
+                  err(new CapabilityError("Only a planning run may return a plan proposal.")),
+                );
+              const proposal = validatePlanningProposal(command.proposal);
+              if (!proposal.ok) return Promise.resolve(proposal);
+              child.planningProposal = structuredClone(proposal.value);
+              return Promise.resolve(ok({ recorded: true }));
             }
-          : {
-              spawnSubagent: async () =>
-                err(new CapabilityError("This agent profile does not enable delegation.")),
-            }),
-      }),
-    );
-    // Reservation: the slot is held from here until confirmed cleanup clears `ready`.
-    child.ready = ready;
-    if (
-      owner === root &&
-      root.childrenSettledAt !== undefined &&
-      Date.now() >= root.childrenSettledAt + 10_000
-    ) {
-      root.hiddenChildren ??= new Set();
-      for (const id of root.children.keys()) root.hiddenChildren.add(id);
-    }
-    owned.set(child.id, child);
-    onCreated?.(child.id);
-    this.emit();
-
-    let cancelTask: Promise<Result<void, ExpectedError>> | undefined;
-    const cancel = () => {
-      cancelTask = this.closeExecution(child);
-      // The event callback cannot await. Observe now; the same task is awaited below, not discarded.
-      void cancelTask.catch(() => {});
-    };
-
-    signal?.addEventListener("abort", cancel, { once: true });
-    if (signal?.aborted) cancel();
-
-    const complete = this.completeChild(
-      root,
-      child,
-      ready,
-      task,
-      child.controller!.signal,
-      () => cancelTask,
-      generation,
-    ).finally(() => {
-      child.settled = true;
+            if (!background && command.action === "ask")
+              return Promise.resolve(
+                err(
+                  new CapabilityError(
+                    "A synchronous parent cannot answer questions. Use asynchronous spawn.",
+                  ),
+                ),
+              );
+            return child.channel!.contact(command, childSignal);
+          },
+          ...(delegating
+            ? {
+                // Children inherit read-only purpose; they cannot select a new purpose.
+                coordinateSubagents: (command, childSignal, childPurpose, target) =>
+                  childPurpose && childPurpose !== purpose
+                    ? Promise.resolve(
+                        err(new CapabilityError("Only the root may start purpose-specific runs.")),
+                      )
+                    : this.coordinate(
+                        child,
+                        root,
+                        generation,
+                        command,
+                        childSignal,
+                        purpose,
+                        target,
+                      ),
+                spawnSubagent: (agent, childTask, childSignal) =>
+                  this.spawnChild(child, root, generation, agent, childTask, {
+                    ...(childSignal ? { signal: childSignal } : {}),
+                    ...(purpose ? { purpose } : {}),
+                  }),
+              }
+            : {
+                spawnSubagent: async () =>
+                  err(new CapabilityError("This agent profile does not enable delegation.")),
+              }),
+        }),
+      );
+      // Reservation: the slot is held from here until confirmed cleanup clears `ready`.
+      child.ready = ready;
+      if (
+        owner === root &&
+        root.childrenSettledAt !== undefined &&
+        Date.now() >= root.childrenSettledAt + 10_000
+      ) {
+        root.hiddenChildren ??= new Set();
+        for (const id of root.children.keys()) root.hiddenChildren.add(id);
+      }
+      owned.set(child.id, child);
+      onCreated?.(child.id);
       this.emit();
-    });
-    child.completion = complete;
-    if (background) {
-      void complete
-        .then((result) => {
-          if (owner !== root) return;
-          this.notifyChild(root, child, {
-            type: "finished",
-            status:
-              child.failure || child.finishedStatus === "failure"
-                ? "failure"
-                : child.finishedStatus === "complete"
-                  ? "complete"
-                  : "stopped",
-            ...(child.finalOutput !== undefined
-              ? { output: child.finalOutput.slice(0, 4000) }
-              : {}),
-            ...(!result.ok ? { error: result.error.message } : {}),
-          });
-        })
-        .catch((error: unknown) => {
-          child.failure = reportUnexpected(error, "background subagent execution");
-          this.emit();
-          if (owner === root)
+
+      let cancelTask: Promise<Result<void, ExpectedError>> | undefined;
+      const cancel = () => {
+        cancelTask = this.closeExecution(child);
+        // The event callback cannot await. Observe now; the same task is awaited below, not discarded.
+        void cancelTask.catch(() => {});
+      };
+
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+
+      const complete = this.completeChild(
+        root,
+        child,
+        ready,
+        task,
+        child.controller!.signal,
+        () => cancelTask,
+        generation,
+      ).finally(async () => {
+        child.settled = true;
+        if (root.phase === "open" && !root.replacing) {
+          const workflow = await this.openTaskWorkflow(root);
+          if (!workflow.ok)
+            console.warn(
+              `[radian:workflow] ${workflow.error.code}: notice delivery deferred; inspect /repair status.`,
+            );
+          else if (workflow.value) {
+            const routed = this.routeTaskWorkflow(root, workflow.value.doc);
+            if (!routed.ok)
+              console.warn(
+                `[radian:workflow] ${routed.error.code}: notice delivery deferred; inspect /repair status.`,
+              );
+          }
+        }
+        this.emit();
+      });
+      child.completion = complete;
+      if (background) {
+        void complete
+          .then((result) => {
+            if (owner !== root) return;
             this.notifyChild(root, child, {
               type: "finished",
-              status: "failure",
-              error: child.failure,
+              status:
+                child.failure || child.finishedStatus === "failure"
+                  ? "failure"
+                  : child.finishedStatus === "complete"
+                    ? "complete"
+                    : "stopped",
+              ...(child.finalOutput !== undefined
+                ? { output: child.finalOutput.slice(0, 4000) }
+                : {}),
+              ...(!result.ok ? { error: result.error.message } : {}),
             });
-        });
-      const created = await ready;
-      signal?.removeEventListener("abort", cancel);
-      if (!created.ok) {
-        await complete;
-        return created;
+          })
+          .catch((error: unknown) => {
+            child.failure = reportUnexpected(error, "background subagent execution");
+            this.emit();
+            if (owner === root)
+              this.notifyChild(root, child, {
+                type: "finished",
+                status: "failure",
+                error: child.failure,
+              });
+          });
+        const created = await ready;
+        signal?.removeEventListener("abort", cancel);
+        if (!created.ok) {
+          await complete;
+          return created;
+        }
+        if (signal?.aborted || !this.ownerCurrent(owner, root, generation)) {
+          await this.closeExecution(child);
+          return err(new CancelledError());
+        }
+        child.backgroundAccepted = true;
+        return ok(child.id);
       }
-      if (signal?.aborted || !this.ownerCurrent(owner, root, generation)) {
-        await this.closeExecution(child);
-        return err(new CancelledError());
+      try {
+        return await complete;
+      } finally {
+        signal?.removeEventListener("abort", cancel);
       }
-      child.backgroundAccepted = true;
-      return ok(child.id);
-    }
-    try {
-      return await complete;
     } finally {
-      signal?.removeEventListener("abort", cancel);
+      // Pre-launch failures retain the durable admission but never retain its live claim.
+      if (!child.ready && !child.closing) this.releaseRepairClaim(child);
     }
   }
 
@@ -2622,7 +3695,22 @@ export class SessionRegistry {
 
     let run: Result<void, ExpectedError>;
     try {
-      run = await executor.prompt(task);
+      const [prompted, workflow] = await Promise.all([
+        executor.prompt(task),
+        this.openTaskWorkflow(root),
+      ]);
+      if (!workflow.ok)
+        console.warn(
+          `[radian:workflow] ${workflow.error.code}: notice delivery deferred; inspect /repair status.`,
+        );
+      else if (workflow.value) {
+        const routed = this.routeTaskWorkflow(root, workflow.value.doc);
+        if (!routed.ok)
+          console.warn(
+            `[radian:workflow] ${routed.error.code}: notice delivery deferred; inspect /repair status.`,
+          );
+      }
+      run = prompted;
     } finally {
       child.runTiming = {
         startedAt,
@@ -2679,6 +3767,7 @@ export class SessionRegistry {
         delete execution.subtreeTask;
       } else {
         execution.closing = false;
+        this.releaseRepairClaim(execution);
         this.emit();
       }
       return result.ok || result.error.errors.length !== 1 ? result : err(result.error.errors[0]!);

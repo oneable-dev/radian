@@ -5,6 +5,17 @@ import { mkdir, mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promise
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
+import { createWorkflowDocument } from "../agents/task-workflow.ts";
+import {
+  mutateWorkflow,
+  openWorkflow,
+  workflowFilePath,
+  workflowLinkFilePath,
+  writeWorkflowLink,
+} from "../agents/task-workflow-store.ts";
+import { addContinuationMember } from "../agents/verification-policy.ts";
+import { userCommandProvenance } from "../agents/repair-command.ts";
+import { ok } from "../result.ts";
 import { planFilePath, saveTaskPlan } from "../agents/task-plan-store.ts";
 import { RepositoryCatalog } from "../workspace/catalog.ts";
 import { expectError, expectOk } from "../testing/results.ts";
@@ -311,4 +322,80 @@ test("CHAT retention preserves externally changed files and refuses non-owned pa
   const rejected = await other.store.prune(30);
   expect(rejected.ok).toBe(false);
   expect(await Bun.file(external).exists()).toBe(true);
+});
+
+async function saveChatWorkflow(record: SessionRecord) {
+  const origin = {
+    conversationId: record.state.conversationId!,
+    cwd: homedir(),
+    sessionFile: record.sessionFile!,
+  };
+  const doc = createWorkflowDocument(origin, crypto.randomUUID(), 0);
+  expectOk(
+    await mutateWorkflow({ originSessionFile: origin.sessionFile }, origin, () =>
+      ok({ doc, effects: [], outcome: { kind: "applied" } }),
+    ),
+  );
+  return doc;
+}
+
+test("Q17 CHAT retention deletes owned workflow records with expired SDK sessions", async () => {
+  // CHAT uses the same private sidecar lifetime as worktree conversations.
+  const { store, record, sessionFile } = await prepare();
+  await saveChatWorkflow(record);
+  expectOk(await store.save([{ ...record, updatedAt: Date.now() + 2000 }]));
+
+  const removed = expectOk(await store.prune(30));
+
+  expect(removed).toBe(1);
+  expect(await Bun.file(workflowFilePath(sessionFile)).exists()).toBe(false);
+  expect(await Bun.file(sessionFile).exists()).toBe(false);
+});
+
+test("Q17 CHAT retention preserves a workflow referenced by a live continuation and warns without error", async () => {
+  // A continuation in another store still protects the canonical origin's safety facts.
+  const { store, record, sessionFile } = await prepare();
+  const next = await prepare();
+  const doc = await saveChatWorkflow(record);
+  const nextOwner = { conversationId: next.record.state.conversationId!, cwd: homedir() };
+  const location = { originSessionFile: sessionFile };
+  expectOk(
+    await mutateWorkflow(location, doc.origin, (current) =>
+      addContinuationMember(current!, {
+        eventKey: "continue-chat",
+        at: 1000,
+        provenance: userCommandProvenance(nextOwner.conversationId, 1000),
+        member: { ...nextOwner, sessionFile: next.sessionFile },
+      }),
+    ),
+  );
+  expectOk(await writeWorkflowLink(next.sessionFile, nextOwner, location, doc.origin));
+  expectOk(await store.save([{ ...record, updatedAt: Date.now() + 2000 }]));
+
+  const removed = expectOk(await store.prune(30));
+  const linked = expectOk(await openWorkflow(next.sessionFile, nextOwner));
+
+  expect(removed).toBe(1);
+  expect(store.retentionWarnings).toHaveLength(1);
+  expect(await Bun.file(workflowFilePath(sessionFile)).exists()).toBe(true);
+  expect(await Bun.file(sessionFile).exists()).toBe(false);
+  expect(await Bun.file(workflowLinkFilePath(next.sessionFile)).exists()).toBe(true);
+  expect(linked!.doc.workflowId).toBe(doc.workflowId);
+});
+
+test("Q17 CHAT workflow fingerprint races retain the original and clear the pending marker", async () => {
+  // The sidecar is rechecked after reservation and before any SDK unlink.
+  const { store, record, sessionFile } = await prepare();
+  await saveChatWorkflow(record);
+  expectOk(await store.save([{ ...record, updatedAt: Date.now() + 2000 }]));
+
+  const failed = await store.prune(30, () => {
+    appendFileSync(workflowFilePath(sessionFile), "\n");
+    return () => {};
+  });
+
+  expect(expectError(failed).code).toBe("CLEANUP_FAILED");
+  expect(await Bun.file(sessionFile).exists()).toBe(true);
+  expect(await Bun.file(workflowFilePath(sessionFile)).exists()).toBe(true);
+  expect(store.isExpired(record.state.conversationId!)).toBe(false);
 });

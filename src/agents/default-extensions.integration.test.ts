@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 test("Actual default packages load resources, management UIs, MCP tools and Web Access in an isolated profile", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "radian-default-extension-integration-"));
+  // Keep isolated profile paths canonical for durable sidecar ownership checks.
+  const directory = await realpath(
+    await mkdtemp(join(tmpdir(), "radian-default-extension-integration-")),
+  );
   const agent = join(directory, "agent");
   await mkdir(agent);
   const entry = fileURLToPath(new URL("../testing/default-extensions-fixture.ts", import.meta.url));

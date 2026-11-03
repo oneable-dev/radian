@@ -15,7 +15,7 @@ import {
   type ExpectedError,
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { renderTaskPlan, taskPlanSchema } from "./task-plan.ts";
+import { renderTaskPlan, taskPlanSchema, validateTaskPlan } from "./task-plan.ts";
 import {
   planFilePath,
   planReviewSchema,
@@ -25,6 +25,8 @@ import {
   type StoredTaskPlan,
 } from "./task-plan-store.ts";
 import type { AgentProfile } from "./agent-profiles.ts";
+import { openWorkflow } from "./task-workflow-store.ts";
+import type { WorkflowDocument } from "./task-workflow.ts";
 import type { SubagentCommand } from "./subagent-tools.ts";
 import {
   planningProposalSchema,
@@ -32,6 +34,17 @@ import {
   type PlanningProposal,
 } from "./planning-proposal.ts";
 
+const invocationEntryType = "radian.task-plan-invocation";
+const invocationSchema = Type.Object({
+  requestId: Type.String(),
+  baselineRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+  state: Type.Union([Type.Literal("active"), Type.Literal("cancelled")]),
+});
+type PlanInvocation = {
+  requestId: string;
+  baselineRevision?: number;
+  state: "active" | "cancelled";
+};
 const requestMessageType = "radian.task-plan-request";
 const resultMessageType = "radian.task-plan";
 const contextMessageType = "radian.task-plan-context";
@@ -45,10 +58,12 @@ const runSchema = Type.Object({
 
 export type PlanningHost = {
   resolveAgent(): Promise<Result<AgentProfile | null, ExpectedError>>;
+  configuredAgent?(): Promise<Result<string | null, ExpectedError>>;
   coordinate(
     command: SubagentCommand,
     signal?: AbortSignal,
   ): Promise<Result<unknown, ExpectedError>>;
+  setPlanningMode?(mode: "hierarchical" | "single" | null): void;
   timeoutMs?: number;
   availableAgents?(): Result<readonly Pick<AgentProfile, "name" | "description">[], ExpectedError>;
 };
@@ -67,7 +82,13 @@ function location(
 ): Result<{ file: string; owner: PlanOwner }, ExpectedError> {
   const file = ctx.sessionManager.getSessionFile();
   return file
-    ? ok({ file, owner: { conversationId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd } })
+    ? ok({
+        file,
+        owner: {
+          conversationId: ctx.sessionManager.getSessionId(),
+          cwd: ctx.cwd,
+        },
+      })
     : err(new CapabilityError("Task plans require a file-backed conversation."));
 }
 
@@ -127,7 +148,148 @@ function planningTask(
   ].join("\n\n");
 }
 
-/** The parent owns validation and storage; a configured child only drafts. */
+const bounded = (text: string, limit = 512) =>
+  text.replace(/[\p{Cc}\p{Cf}]+/gu, " ").slice(0, limit);
+
+function workflowUnavailable(error: ExpectedError): string {
+  return `Workflow state unavailable [${error.code}]; task status, repair admission and plan readiness cannot be trusted; do not assume an empty or unlocked workflow.`;
+}
+
+function unavailableWorkflowReport(error: ExpectedError): string {
+  return [
+    "Planning: incomplete.",
+    "Approval: not implied. Task execution: not started by /plan.",
+    workflowUnavailable(error),
+    `Reason: [${error.code}] ${bounded(error.message, 1024)}`,
+  ].join("\n");
+}
+
+const artifactBodySchema = Type.Object({
+  plan: taskPlanSchema,
+  review: planReviewSchema,
+});
+
+/** Derive readiness from current declarations and validated bodies, exposing only bounded facts. */
+function workflowReport(
+  doc: WorkflowDocument | null,
+  questions: string[],
+  notice: string,
+  invocation?: PlanInvocation,
+  legacyRequest = false,
+): string {
+  const manifest = doc?.manifest;
+  const branches = manifest?.branches
+    ? manifest.branches.flatMap((id) => (doc?.tasks[id] ? [doc.tasks[id]!] : []))
+    : Object.values(doc?.tasks ?? {}).filter((task) => task.kind === "plan" && !task.parentTaskId);
+  const previousScope =
+    invocation !== undefined &&
+    (!manifest ||
+      manifest.declaredRevision === undefined ||
+      (invocation.baselineRevision !== undefined &&
+        manifest.declaredRevision <= invocation.baselineRevision));
+  const reasons: string[] = [];
+  if (previousScope || legacyRequest || (invocation && invocation.baselineRevision === undefined))
+    reasons.push("Scope was not declared for the current /plan request");
+  if (invocation?.state === "cancelled")
+    reasons.push("Planning request was cancelled; artifacts were retained.");
+  if (manifest && manifest.declaredRevision === undefined)
+    reasons.push("Scope predates request correlation; declare it again.");
+  const fresh = (latest: { docRevision?: number } | undefined) =>
+    latest?.docRevision !== undefined &&
+    manifest?.declaredRevision !== undefined &&
+    latest.docRevision > manifest.declaredRevision;
+  if (!manifest || !branches.length) reasons.push("No plan branches declared.");
+  const warnings: string[] = [];
+  const files = new Map<string, Set<string>>();
+  let missing = 0;
+  let questionCount = questions.length;
+  const rows = branches.map((task) => {
+    const artifact = task.planArtifact ? doc?.artifacts[task.planArtifact] : undefined;
+    const latest = artifact?.revisions.at(-1);
+    const stale = latest !== undefined && !fresh(latest);
+    if (!latest || stale) {
+      missing++;
+      reasons.push(
+        stale
+          ? `Stale branch artifact: ${task.id} predates the current scope.`
+          : `Missing branch artifact: ${task.id}`,
+      );
+    }
+    if (latest) {
+      if (Value.Check(artifactBodySchema, latest.body) && validateTaskPlan(latest.body.plan).ok) {
+        for (const question of latest.body.plan.openQuestions) {
+          reasons.push(`Open question (${task.id}): ${question}`);
+          questionCount++;
+        }
+        warnings.push(
+          ...latest.body.review.warnings.map(
+            (warning) => `Warning (${bounded(task.id)}): ${bounded(warning, 1024)}`,
+          ),
+        );
+        for (const planTask of latest.body.plan.tasks) {
+          for (const file of planTask.files) {
+            const owners = files.get(file) ?? new Set<string>();
+            owners.add(task.id);
+            files.set(file, owners);
+          }
+        }
+      } else reasons.push(`Invalid branch artifact body: ${task.id}`);
+    }
+    for (const dependency of task.dependsOn) {
+      const target = doc?.tasks[dependency];
+      const dependencyArtifact = target?.planArtifact
+        ? doc?.artifacts[target.planArtifact]?.revisions.at(-1)
+        : undefined;
+      if (!fresh(dependencyArtifact))
+        reasons.push(
+          `Cross-branch dependency ${task.id} -> ${dependency} has no artifact for the current scope.`,
+        );
+      else if (fresh(latest)) {
+        const receipt = latest!.dependencies?.find(
+          (item) => item.artifactId === target!.planArtifact,
+        );
+        const current = `${target!.planArtifact}@${dependencyArtifact!.revision}`;
+        if (!receipt)
+          reasons.push(
+            `Dependency coverage missing: ${task.id} has no host-captured review of ${current}.`,
+          );
+        else if (receipt.revision !== dependencyArtifact!.revision)
+          reasons.push(
+            `Dependency coverage obsolete: ${task.id} reviewed ${receipt.artifactId}@${receipt.revision}; current ${current}.`,
+          );
+      }
+    }
+    const reference = latest
+      ? `${bounded(task.planArtifact!)}@${latest.revision}${stale ? " (stale)" : ""}: ${bounded(latest.summary, 1024)}`
+      : "missing";
+    return `${bounded(task.id)} -> ${bounded(task.lead.profile)} | ${reference}`;
+  });
+  reasons.push(...questions.map((question) => `Unresolved planner question: ${question}`));
+  reasons.push(...(manifest?.diagnostics ?? []));
+  const sharedFiles = [...files]
+    .filter(([, owners]) => owners.size > 1)
+    .map(
+      ([file, owners]) =>
+        `Diagnostic: shared file ${bounded(file, 1024)} in ${[...owners].map((id) => bounded(id)).join(", ")}`,
+    );
+  const text = [
+    `Planning: ${reasons.length ? "incomplete" : "ready for review"}.`,
+    "Approval: not implied. Task execution: not started by /plan.",
+    `${previousScope && manifest ? "Previous scope" : "Goal"}: ${bounded(manifest?.goal ?? "Not declared")}`,
+    `Branches: ${branches.length}; missing: ${missing}; diagnostics: ${manifest?.diagnostics.length ?? 0}; questions: ${questionCount}.`,
+    ...reasons.map((reason) => `Reason: ${bounded(reason, 1024)}`),
+    ...(notice ? [notice] : []),
+    ...rows,
+    ...warnings,
+    ...sharedFiles,
+    "Retrieve a full body only when needed: radian-task status artifact=<ref@revision> (owning lead/root, or a dependent's frozen input).",
+  ].join("\n");
+  const marker =
+    "\n[Truncated; retrieve complete branch artifacts and workflow diagnostics before review.]";
+  return text.length <= 12000 ? text : `${text.slice(0, 12000 - marker.length)}${marker}`;
+}
+
+/** Hierarchical leads own artifacts; explicit --single retains parent-owned sidecars. */
 export function taskPlanningExtension(
   recordRequest?: (invocation: string) => void,
   host?: PlanningHost,
@@ -137,9 +299,13 @@ export function taskPlanningExtension(
     replaceable: true,
     factory: (pi) => {
       let planning = false;
+      let single = false;
+      let hierarchyStarted = false;
+      let legacyNotice = "";
       let submitted = false;
       let cancelled = false;
       let invocation = 0;
+      let planInvocation: PlanInvocation | undefined;
       let requiredAgent: AgentProfile | undefined;
       let delegation: Delegation | undefined;
 
@@ -206,6 +372,71 @@ export function taskPlanningExtension(
         return run;
       };
 
+      const readiness = async (ctx: ExtensionContext) => {
+        const target = location(ctx);
+        if (!target.ok) throw target.error;
+        const workflow = await openWorkflow(target.value.file, target.value.owner);
+        if (!workflow.ok) return unavailableWorkflowReport(workflow.error);
+        const questions: string[] = [];
+        if (host) {
+          const runs = await host.coordinate({ action: "status" });
+          if (!runs.ok) throw runs.error;
+          if (!Array.isArray(runs.value)) throw new InputError("Invalid planning status response.");
+          for (const run of runs.value) {
+            if (!Value.Check(runSchema, run)) throw new InputError("Invalid planning run.");
+            questions.push(
+              ...run.questions.map((question) => `${run.id}/${question.id}: ${question.message}`),
+            );
+          }
+        }
+        const branch = ctx.sessionManager.getBranch();
+        const saved = branch.findLast(
+          (entry) => entry.type === "custom" && entry.customType === invocationEntryType,
+        );
+        const currentInvocation =
+          planInvocation ??
+          (saved?.type === "custom" && Value.Check(invocationSchema, saved.data)
+            ? saved.data
+            : undefined);
+        const request = branch.findLast(
+          (entry) => entry.type === "custom_message" && entry.customType === requestMessageType,
+        );
+        const legacyRequest =
+          request?.type === "custom_message" &&
+          (!currentInvocation ||
+            !Value.Check(
+              Type.Object({ requestId: Type.Literal(currentInvocation.requestId) }),
+              request.details,
+            ));
+        return workflowReport(
+          workflow.value?.doc ?? null,
+          questions,
+          legacyNotice,
+          currentInvocation,
+          legacyRequest,
+        );
+      };
+      const stopHierarchy = async (shutdown = false) => {
+        if (!host || !hierarchyStarted) return;
+        const runs = await host.coordinate({ action: "status" });
+        if (!runs.ok) {
+          if (shutdown && ["SESSION_NOT_OPEN", "RUNTIME_STOPPING"].includes(runs.error.code))
+            return;
+          throw runs.error;
+        }
+        if (!Array.isArray(runs.value)) throw new InputError("Invalid planning status response.");
+        for (const run of runs.value) {
+          if (!Value.Check(runSchema, run)) throw new InputError("Invalid planning run.");
+          const stopped = await host.coordinate({ action: "stop", id: run.id });
+          if (!stopped.ok) {
+            if (shutdown && ["SESSION_NOT_OPEN", "RUNTIME_STOPPING"].includes(stopped.error.code))
+              return;
+            throw stopped.error;
+          }
+        }
+        hierarchyStarted = false;
+      };
+
       pi.on("before_agent_start", (event) => {
         planning =
           (event.messageType === "custom" && event.message.customType === requestMessageType) ||
@@ -213,24 +444,36 @@ export function taskPlanningExtension(
         submitted = false;
         cancelled = false;
         if (!planning) requiredAgent = undefined;
+        host?.setPlanningMode?.(planning ? (single ? "single" : "hierarchical") : null);
       });
       pi.on("context", async (event, ctx) => {
         const target = location(ctx);
         if (!target.ok) return;
+        const workflow = await openWorkflow(target.value.file, target.value.owner);
+        if (!workflow.ok)
+          ctx.ui.notify(`[${workflow.error.code}] ${workflow.error.message}`, "warning");
         const current = await readTaskPlan(target.value.file, target.value.owner);
         if (!current.ok) {
           ctx.ui.notify(
             `Current task plan could not be read [${current.error.code}]: ${current.error.message}`,
             "warning",
           );
-          return;
         }
+        const legacy = current.ok ? current.value : null;
         const messages = [...event.messages];
-        if (current.value)
+        if (!workflow.ok || workflow.value)
           messages.push({
             role: "custom" as const,
             customType: contextMessageType,
-            content: `The conversation-wide current plan is ${planFilePath(target.value.file)} (SHA-256 ${current.value.hash}). Goal: ${current.value.plan.goal}. Read it with radian-plan before relying on or revising details. Older plan submissions in the transcript do not replace this current file. Its structural validity is not user approval or proof of task completion. Before reporting completion of user-authorized implementation of this plan, compare its applicable acceptance criteria with the actual changes and verification evidence; report unmet or unverified criteria. Do not apply this plan to unrelated requests or execute acceptance commands during /plan.`,
+            content: workflow.ok ? await readiness(ctx) : workflowUnavailable(workflow.error),
+            display: false,
+            timestamp: Date.now(),
+          });
+        if (legacy)
+          messages.push({
+            role: "custom" as const,
+            customType: contextMessageType,
+            content: `The conversation-wide current plan is ${planFilePath(target.value.file)} (SHA-256 ${legacy.hash}). Goal: ${legacy.plan.goal}. Read it with radian-plan before relying on or revising details. Older plan submissions in the transcript do not replace this current file. Its structural validity is not user approval or proof of task completion. Before reporting completion of user-authorized implementation of this plan, compare its applicable acceptance criteria with the actual changes and verification evidence; report unmet or unverified criteria. Do not apply this plan to unrelated requests or execute acceptance commands during /plan.`,
             display: false,
             timestamp: Date.now(),
           });
@@ -244,11 +487,38 @@ export function taskPlanningExtension(
           });
         if (messages.length !== event.messages.length) return { messages };
       });
-      pi.on("tool_call", (event) => {
+      pi.on("tool_call", async (event, ctx) => {
         if (!planning) return;
         const delegated = ["radian-subagent", "radian_subagent", "subagent"].includes(
           event.toolName,
         );
+        if (delegated && !single && !cancelled) {
+          const action = "action" in event.input ? event.input.action : undefined;
+          if (["list", "status", "wait", "reply", "stop"].includes(String(action))) return;
+          if (action === "spawn") {
+            const target = location(ctx);
+            if (!target.ok) throw target.error;
+            const workflow = await openWorkflow(target.value.file, target.value.owner);
+            if (!workflow.ok)
+              return {
+                block: true,
+                reason: workflowUnavailable(workflow.error),
+              };
+            const binding = "binding" in event.input ? event.input.binding : undefined;
+            if (binding && typeof binding === "object" && "id" in binding && "role" in binding) {
+              const task = workflow.value?.doc.tasks[String(binding.id)];
+              if (
+                task?.kind === "plan" &&
+                !task.parentTaskId &&
+                binding.role === "lead" &&
+                "agent" in event.input &&
+                task.lead.profile === event.input.agent &&
+                !("purpose" in binding)
+              )
+                return;
+            }
+          }
+        }
         if (
           event.toolName === "edit" ||
           event.toolName === "write" ||
@@ -257,11 +527,22 @@ export function taskPlanningExtension(
           return {
             block: true,
             reason:
-              "/plan only investigates and writes its plan artifact; it does not edit product files or execute delegated work. Configured planning agents are managed exclusively through radian-plan.",
+              "/plan only investigates and publishes plan artifacts; it does not edit product files or execute delegated work. Hierarchical spawning requires a declared branch lead binding. Legacy configured planners are managed exclusively through radian-plan.",
           };
         }
       });
-      pi.on("agent_before_settle", (event) => {
+      pi.on("agent_before_settle", async (event, ctx) => {
+        if (planning && !single)
+          return {
+            entries: [
+              {
+                type: "custom_message",
+                customType: resultMessageType,
+                content: await readiness(ctx),
+                display: true,
+              },
+            ],
+          };
         if (planning && !submitted && event.outcome === "completed")
           return {
             entries: [
@@ -277,14 +558,18 @@ export function taskPlanningExtension(
           };
       });
       pi.on("agent_settled", async (event) => {
+        if (event.aborted) await stopHierarchy();
         planning = false;
+        host?.setPlanningMode?.(null);
         if (event.aborted) {
           const result = await stop(forget());
           if (!result.ok) reportUnexpected(result.error, "planning cancellation");
         }
       });
       pi.on("session_shutdown", async () => {
+        await stopHierarchy(true);
         planning = false;
+        host?.setPlanningMode?.(null);
         const result = await stop(forget());
         if (
           !result.ok &&
@@ -299,12 +584,12 @@ export function taskPlanningExtension(
         label: "Task plan",
         executionMode: "sequential",
         description:
-          "Read or validate the parent conversation's task graph. During /plan, delegate/wait/reply/cancel manage only the configured read-only planner; accept saves its verified proposal. Legacy parent planning uses submit. No action executes plan tasks or implies approval.",
+          "Report hierarchical planning readiness from durable branch artifacts, or cancel planning runs without deleting records. read retrieves a legacy .plan.json. Only explicit /plan --single supports delegate/wait/reply/accept or parent submit. No action executes tasks or implies approval.",
         parameters: Type.Object(
           {
             action: Type.Union(
-              ["read", "submit", "delegate", "wait", "reply", "cancel", "accept"].map((action) =>
-                Type.Literal(action),
+              ["report", "read", "submit", "delegate", "wait", "reply", "cancel", "accept"].map(
+                (action) => Type.Literal(action),
               ),
             ),
             plan: Type.Optional(taskPlanSchema),
@@ -319,6 +604,11 @@ export function taskPlanningExtension(
           const target = location(ctx);
           if (!target.ok) throw target.error;
           const { file, owner } = target.value;
+          if (args.action === "report")
+            return {
+              content: [{ type: "text", text: await readiness(ctx) }],
+              details: null,
+            };
           if (args.action === "read") {
             const current = await readTaskPlan(file, owner);
             if (!current.ok) throw current.error;
@@ -337,13 +627,23 @@ export function taskPlanningExtension(
             };
           }
           if (args.action === "cancel") {
-            if (!planning && !delegation)
+            if (!planning && !delegation && !hierarchyStarted)
               throw new InputError("There is no planning request to cancel.");
             cancelled = true;
+            if (!single && planInvocation) {
+              planInvocation = { ...planInvocation, state: "cancelled" };
+              pi.appendEntry(invocationEntryType, planInvocation);
+            }
+            await stopHierarchy();
             const result = await stop(forget());
             if (!result.ok) throw result.error;
             return {
-              content: [{ type: "text", text: "Planning cancelled. Previous plan was retained." }],
+              content: [
+                {
+                  type: "text",
+                  text: "Planning cancelled. Previous plan was retained.",
+                },
+              ],
               details: null,
             };
           }
@@ -352,6 +652,10 @@ export function taskPlanningExtension(
               "This planning turn was cancelled; previous plan was retained.",
             );
           if (!planning) throw new InputError("Start /plan before submitting a task graph.");
+          if (!single)
+            throw new InputError(
+              "Hierarchical /plan uses radian-task declare and lead publish-plan; use report, not parent submit/accept. Legacy mode requires /plan --single.",
+            );
           if (["delegate", "wait", "reply"].includes(args.action)) {
             const request = currentRequest();
             let status: unknown;
@@ -420,7 +724,10 @@ export function taskPlanningExtension(
               status = await coordinate(request, { action: "wait", id: request.runId }, signal);
             }
             const run = observe(request, status);
-            return { content: [{ type: "text", text: JSON.stringify(run) }], details: run };
+            return {
+              content: [{ type: "text", text: JSON.stringify(run) }],
+              details: run,
+            };
           }
           const accepting = delegation;
           const acceptedInvocation = invocation;
@@ -477,12 +784,17 @@ export function taskPlanningExtension(
           if (proposal && delegation === accepting) forget();
           return {
             content: [{ type: "text", text: report(saved.value, file) }],
-            details: { hash: saved.value.hash, file: planFilePath(file), structural: "passed" },
+            details: {
+              hash: saved.value.hash,
+              file: planFilePath(file),
+              structural: "passed",
+            },
           };
         },
       });
       pi.registerCommand("plan", {
-        description: "Create, validate and present a task/delegation graph: /plan [requirements]",
+        description:
+          "Plan with branch leads: /plan [requirements]; legacy: /plan --single [requirements]",
         handler: async (args, ctx) => {
           if (!ctx.isIdle())
             throw new SessionError(
@@ -490,11 +802,38 @@ export function taskPlanningExtension(
               "Wait for the current run before creating or revising its task plan.",
             );
           invocation++;
-          const resolved = host ? await host.resolveAgent() : ok(null);
+          await stopHierarchy();
+          single = /^--single(?:\s|$)/.test(args.trim());
+          planInvocation = undefined;
+          if (!single) {
+            const target = location(ctx);
+            if (!target.ok) throw target.error;
+            const workflow = await openWorkflow(target.value.file, target.value.owner);
+            planInvocation = {
+              requestId: crypto.randomUUID(),
+              ...(workflow.ok ? { baselineRevision: workflow.value?.doc.revision ?? 0 } : {}),
+              state: "active",
+            };
+            pi.appendEntry(invocationEntryType, planInvocation);
+          }
+          hierarchyStarted = !single;
+          const requirements = single ? args.trim().replace(/^--single\s*/, "") : args.trim();
+          const resolved =
+            host && (single || !host.configuredAgent) ? await host.resolveAgent() : ok(null);
           if (!resolved.ok) throw resolved.error;
+          const configured =
+            !single && host?.configuredAgent
+              ? await host.configuredAgent()
+              : ok(resolved.value?.name ?? null);
+          if (!configured.ok) throw configured.error;
           const previous = await stop(forget());
           if (!previous.ok) throw previous.error;
-          requiredAgent = resolved.value ?? undefined;
+          requiredAgent = single ? (resolved.value ?? undefined) : undefined;
+          legacyNotice =
+            !single && configured.value
+              ? `commandAgents.plan (${configured.value}) is a legacy single-planner binding and is not used by hierarchical /plan; run /plan --single to use it.`
+              : "";
+          host?.setPlanningMode?.(single ? "single" : "hierarchical");
           if (requiredAgent) {
             const target = location(ctx);
             if (!target.ok) throw target.error;
@@ -504,16 +843,24 @@ export function taskPlanningExtension(
               requestId: crypto.randomUUID(),
               profile: requiredAgent,
               requirements:
-                args.trim() ||
+                requirements ||
                 "Use the requirements already discussed; ask about material unknowns.",
               baseline: current.value?.hash ?? null,
             };
           }
+          let modeInstructions = `Hierarchical planning mode. Declare relevant branches with radian-task declare, spawn each assigned lead with binding {id: branchId, role: "lead"}, and ask leads to publish-plan. Never accept/save/rewrite their bodies. Use radian-plan report.\n${legacyNotice}`;
+          if (single)
+            modeInstructions = requiredAgent
+              ? `Legacy single-planner mode. Host-selected planning agent: ${requiredAgent.name}. Use radian-plan delegate, wait/reply, then accept. Do not draft a replacement in the parent.`
+              : "Legacy single-planner mode without a configured planner: investigate and use radian-plan submit in the parent.";
           recordRequest?.(`/plan${args ? ` ${args}` : ""}`);
           pi.sendMessage(
             {
               customType: requestMessageType,
-              content: `${instructions}\n\n${requiredAgent ? `Host-selected planning agent: ${requiredAgent.name}. Use radian-plan delegate, wait/reply, then accept. Do not draft a replacement in the parent.` : "No planning agent is configured; use the parent planning workflow."}\n\nUser requirements:\n${args.trim() || "Use the requirements already discussed in this conversation. Ask if the goal is not clear."}`,
+              ...(!single && planInvocation
+                ? { details: { requestId: planInvocation.requestId } }
+                : {}),
+              content: `${instructions}\n\n${modeInstructions}\n\nUser requirements:\n${requirements || "Use the requirements already discussed in this conversation. Ask if the goal is not clear."}`,
               display: false,
             },
             { triggerTurn: true },

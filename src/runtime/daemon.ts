@@ -827,6 +827,7 @@ class SharedDaemon {
         "prompt-images",
         "session-attention",
         "session-controls",
+        "task-repair",
         "session-tab-commands",
         "session-exit",
         "agent-interrupt",

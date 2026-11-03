@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
@@ -85,7 +85,8 @@ function isMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"
 }
 
 async function fixture(config: FixtureOptions = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "radian-provider-adapter-"));
+  // Sidecar ownership checks require canonical paths, including macOS temporary directories.
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "radian-provider-adapter-")));
   let executor: SessionExecutor | undefined;
   try {
     const options = await offlineRuntime(join(directory, "agent"));

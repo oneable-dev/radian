@@ -1233,7 +1233,7 @@ test("A read-only delegating Lead launches a writable Engineer through the host 
   }
 });
 
-test("Planning runs stay read-only nondelegating leaves despite delegation metadata", async () => {
+test("Q03 Planning runs retain read-only tools and authorized delegation", async () => {
   const tools: string[][] = [];
   const app = await fixture((base) => (model, context, options) => {
     const user = context.messages.findLast((message) => message.role === "user");
@@ -1266,8 +1266,8 @@ test("Planning runs stay read-only nondelegating leaves despite delegation metad
     );
     const planner = app.contexts.find((context) => context.purpose === "planning")!;
 
-    expect(planner.coordinateSubagents).toBeUndefined();
-    expect(tools[0]).not.toContain("radian-subagent");
+    expect(planner.coordinateSubagents).toBeFunction();
+    expect(tools[0]).toContain("radian-subagent");
     expect(tools[0]).not.toContain("write");
   } finally {
     await app.cleanup();

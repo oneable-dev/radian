@@ -27,6 +27,11 @@ import {
 import { sessionRecordKey } from "../agents/session-snapshot.ts";
 import { expandPromptDraft } from "../agents/prompt-input.ts";
 import { parseSessionControl, type SessionControl } from "../agents/session-controls.ts";
+import {
+  parseRepairCommand,
+  userCommandProvenance,
+  type RepairCommand,
+} from "../agents/repair-command.ts";
 import { modelCatalogQuerySchema } from "../agents/model-selection.ts";
 import { piSessionFactory } from "../agents/pi-session-adapter.ts";
 import { SessionHistory } from "../agents/history.ts";
@@ -586,6 +591,7 @@ export class WorkspaceRuntime {
         "prompt-images",
         "transcript-images",
         "session-controls",
+        "task-repair",
         "session-tab-commands",
         "session-exit",
         "agent-interrupt",
@@ -1035,7 +1041,19 @@ export class WorkspaceRuntime {
 
         return this.sessionControl(command.sessionId, control, command.conversationId);
       }
+      case "task-workflow":
+        return this.repair(command.sessionId, command.conversationId, command.command);
       case "prompt": {
+        const repair = parseRepairCommand(command.text);
+        if (!repair.ok) return repair;
+        if (repair.value) {
+          if (command.images?.length) {
+            return err(new InputError("/repair does not accept image attachments."));
+          }
+          // A wire prompt from the UI client is direct user input, including legacy clients.
+          // Model, tool and extension messages never enter this host admission path.
+          return this.repair(command.sessionId, command.conversationId, repair.value);
+        }
         const control = parseSessionControl(command.text);
         if (!control.ok) {
           return control;
@@ -1244,6 +1262,32 @@ export class WorkspaceRuntime {
         setTimeout(() => this.onStop(), 20);
         return ok(null);
     }
+  }
+
+  private async repair(
+    sessionId: string,
+    conversationId: string | undefined,
+    command: RepairCommand,
+  ): Promise<Result<string, ExpectedError>> {
+    const state = this.registry.details(sessionId);
+    if (!state || this.failedRecovery.has(sessionId)) {
+      return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+    }
+    if (!conversationId || state.conversationId !== conversationId) {
+      return err(
+        new SessionError(
+          "SESSION_CONFLICT",
+          "Conversation changed; no /repair command was accepted.",
+        ),
+      );
+    }
+
+    return this.registry.repair(
+      sessionId,
+      conversationId,
+      command,
+      userCommandProvenance(conversationId, Date.now()),
+    );
   }
 
   private async sessionControl(

@@ -2,13 +2,16 @@ import { expect, jest, spyOn, test } from "bun:test";
 import { RuntimeClient } from "./client.ts";
 import {
   emptyPreferences,
+  errorStatus,
   maxFrameBytes,
+  parseCommand,
   protocolVersion,
   type RuntimeSnapshot,
   type PtyFrame,
 } from "./protocol.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
+import { WorkflowError } from "../errors.ts";
 
 const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-reconnect-unit-test");
 const snapshot = (): RuntimeSnapshot => ({
@@ -122,6 +125,68 @@ function events(value: unknown, signal?: AbortSignal | null, chunkBytes = Number
     },
   };
 }
+
+test.each([
+  ["/repair", [], [], "UNSUPPORTED_CAPABILITY"],
+  ["/repair recheck", [], ["task-repair"], "INVALID_INPUT"],
+  ["/repair cancel x extra", [], ["task-repair"], "INVALID_INPUT"],
+  ["/repair continue not-a-uuid", [], ["task-repair"], "INVALID_INPUT"],
+  ["/repair status", ["/image.png"], ["task-repair"], "INVALID_INPUT"],
+  ["/repair status", [], ["task-repair"], "PROTOCOL_ERROR"],
+] as const)(
+  "Q12 repair rejects unsafe submissions before transport: %s %j %j",
+  async (text, images, capabilities, code) => {
+    // Legacy services and incomplete input must never receive a fallback model prompt.
+    const state = { ...snapshot(), capabilities: [...capabilities] };
+    const mocked = stubFetch(async () => {
+      throw new Error("Rejected repair input must not transmit");
+    });
+    const client = new RuntimeClient(paths, state);
+    try {
+      const result = await client.prompt("session", text, images);
+
+      // The typed draft remains owned by the caller, with a stable rejection code.
+      const error = expectError(result);
+      expect(error.code).toBe(code);
+      if (code === "UNSUPPORTED_CAPABILITY") {
+        expect(error.message).toContain("Running service predates /repair");
+        expect(error.message).toContain("No prompt was sent.");
+      }
+      expect(mocked).not.toHaveBeenCalled();
+    } finally {
+      await client.disconnect();
+      mocked.mockRestore();
+    }
+  },
+);
+
+test.each([
+  ["WORKFLOW_NOT_FOUND", 404],
+  ["WORKFLOW_STALE", 409],
+  ["WORKFLOW_REPAIR_LOCKED", 409],
+  ["WORKFLOW_CONFLICT", 409],
+  ["WORKFLOW_NOT_AUTHORIZED", 422],
+] as const)("Q12 expected repair failure %s is not an internal server error", (code, status) => {
+  // Repair-domain rejections preserve stable codes without being logged as host failures.
+  const error = new WorkflowError(code, "Repair rejected");
+
+  expect(errorStatus(error)).toBe(status);
+});
+
+test.each([
+  { kind: "recheck" },
+  { kind: "cancel", id: "" },
+  { kind: "continue", workflowId: "not-a-uuid" },
+  { kind: "status", provenance: { kind: "user-command" } },
+  { kind: "unknown" },
+])("Q12 repair wire rejects malformed command %j", (command) => {
+  // Provenance cannot be supplied by a wire caller, nor can invalid task operations pass validation.
+  const wire = { type: "task-workflow", sessionId: "session", conversationId: "current", command };
+
+  const result = parseCommand(JSON.stringify(wire));
+
+  expect(expectError(result).code).toBe("INVALID_INPUT");
+});
 
 test("Raw history never becomes model prompts or other requests even on legacy services", async () => {
   // Protect host commands in popup-free API calls and legacy services.

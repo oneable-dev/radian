@@ -75,6 +75,8 @@ import {
   coordinatorTool,
   leafExcludedTools,
   legacyDelegationTools,
+  matcher,
+  planningTools,
   supervisorToolName,
 } from "./leaf-extension.ts";
 import { commandDisplay, commandDisplayEntryType, type CommandDisplay } from "./command-display.ts";
@@ -86,6 +88,8 @@ import {
   type AgentProfile,
 } from "./agent-profiles.ts";
 import { subagentTool, supervisorTool, type SubagentCommand } from "./subagent-tools.ts";
+import { taskTool, type TaskCommand } from "./task-tool.ts";
+import { parseRepairCommand } from "./repair-command.ts";
 import { subagentInstructions } from "./subagent-instructions.ts";
 import {
   SubagentNotifications,
@@ -171,17 +175,95 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         `Unknown agent: ${context.agent}. Use radian-subagent list to discover profiles.`,
       );
     // Capability is fixed for this run: host authorization plus profile metadata, never purpose
-    // chosen by the child. Planning runs remain read-only proposal leaves.
+    // chosen by the child. Read-only purpose propagates through authorized delegation.
     const delegating =
       context.role === "subagent" &&
-      context.purpose !== "planning" &&
       delegates(profile) &&
       context.coordinateSubagents !== undefined;
     const coordinates = context.role === "main" || delegating;
+    let planningMode: "hierarchical" | "single" | null = null;
+    const planningRuns = new Set<string>();
+    const coordinatePlanning = async (
+      command: SubagentCommand,
+      signal?: AbortSignal,
+    ): Promise<Result<unknown, ExpectedError>> => {
+      if (!context.coordinateSubagents)
+        return err(new CapabilityError("This session cannot coordinate a planning agent."));
+      if ((command.action === "status" || command.action === "wait") && !command.id) {
+        while (true) {
+          const statuses: unknown[] = [];
+          const active: string[] = [];
+          let questioning = false;
+          for (const id of planningRuns) {
+            const result = await coordinatePlanning({ action: "status", id }, signal);
+            if (!result.ok) return result;
+            if (!Array.isArray(result.value))
+              return err(new InputError("Invalid planning status."));
+            statuses.push(...result.value);
+            for (const run of result.value) {
+              if (!run || typeof run !== "object") continue;
+              if ("status" in run && ["working", "waiting"].includes(String(run.status)))
+                active.push(id);
+              if ("questions" in run && Array.isArray(run.questions) && run.questions.length)
+                questioning = true;
+            }
+          }
+          if (command.action === "status" || !active.length || questioning) return ok(statuses);
+          // Wait for progress from any branch, so a question on another branch cannot deadlock us.
+          const pending = new AbortController();
+          const waitingSignal = signal ? AbortSignal.any([signal, pending.signal]) : pending.signal;
+          try {
+            const changed = await Promise.race(
+              active.map((id) => coordinatePlanning({ action: "wait", id }, waitingSignal)),
+            );
+            if (!changed.ok) return changed;
+          } finally {
+            pending.abort();
+          }
+        }
+      }
+      if ("id" in command && command.id && !planningRuns.has(command.id))
+        return err(new InputError("This run does not belong to this planning session."));
+      let target: AgentProfile | undefined;
+      if (command.action === "list" || command.action === "spawn") {
+        const available = profiles();
+        if (!available.ok) return available;
+        if (command.action === "list")
+          return ok(available.value.map(({ prompt: _prompt, ...entry }) => entry));
+        target = available.value.find((entry) => entry.name === command.agent);
+        if (!target) return err(new InputError(`Unknown planning agent ${command.agent}.`));
+      }
+      const result = await context.coordinateSubagents(command, signal, "planning", target);
+      if (!result.ok) return result;
+      if (
+        command.action === "spawn" &&
+        result.value &&
+        typeof result.value === "object" &&
+        "id" in result.value &&
+        typeof result.value.id === "string"
+      )
+        planningRuns.add(result.value.id);
+      // A lead's artifact body is available only through explicit radian-task retrieval.
+      const summarize = (value: unknown) => {
+        if (planningMode !== "hierarchical" || !value || typeof value !== "object") return value;
+        const {
+          output: _output,
+          recentOutput: _recent,
+          proposal: _proposal,
+          task: _task,
+          ...summary
+        } = value as Record<string, unknown>;
+        return summary;
+      };
+      return ok(
+        Array.isArray(result.value) ? result.value.map(summarize) : summarize(result.value),
+      );
+    };
     const coordinate = async (
       command: SubagentCommand,
       signal?: AbortSignal,
     ): Promise<Result<unknown, ExpectedError>> => {
+      if (planningMode) return coordinatePlanning(command, signal);
       let target: AgentProfile | undefined;
       if (command.action === "list" || command.action === "spawn") {
         const available = profiles();
@@ -200,6 +282,31 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         context.coordinateSubagents?.(command, signal, undefined, target) ??
         err(new CapabilityError("This session cannot coordinate subagents."))
       );
+    };
+    const taskTools =
+      context.coordinateTask && (context.role === "main" || context.binding)
+        ? [
+            taskTool(async (command: TaskCommand, callId, signal) => {
+              let knownProfiles: string[] = [];
+              if (["declare", "assign", "reassign", "continue", "split"].includes(command.action)) {
+                const available = profiles();
+                if (!available.ok) return available;
+                knownProfiles = available.value.map((item) => item.name);
+              }
+              return context.coordinateTask!(command, callId, signal, knownProfiles);
+            }),
+          ]
+        : [];
+    const reloadCommandSettings = async (): Promise<Result<void, ExpectedError>> => {
+      await settingsManager.reload();
+      if (settingsManager.drainErrors().length)
+        return err(
+          new InputError(
+            "Could not reload command agent settings; the existing plan was retained.",
+          ),
+        );
+      applyHostSettings();
+      return ok(undefined);
     };
     const resourceLoader: ResourceLoader = sessionResourceLoader({
       cwd: context.cwd,
@@ -260,16 +367,27 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                 },
                 {
                   resolveAgent: async () => {
-                    await settingsManager.reload();
-                    const failures = settingsManager.drainErrors();
-                    if (failures.length)
+                    const loaded = await reloadCommandSettings();
+                    return loaded.ok
+                      ? resolveCommandAgent("plan", settingsManager.getSettings(), profiles)
+                      : loaded;
+                  },
+                  configuredAgent: async () => {
+                    const loaded = await reloadCommandSettings();
+                    if (!loaded.ok) return loaded;
+                    const settings = settingsManager.getSettings();
+                    const bindings =
+                      "commandAgents" in settings ? settings.commandAgents : undefined;
+                    if (bindings === undefined) return ok(null);
+                    if (!bindings || typeof bindings !== "object" || Array.isArray(bindings))
                       return err(
-                        new InputError(
-                          "Could not reload command agent settings; the existing plan was retained.",
-                        ),
+                        new InputError("commandAgents must map commands to profile names."),
                       );
-                    applyHostSettings();
-                    return resolveCommandAgent("plan", settingsManager.getSettings(), profiles);
+                    if (!("plan" in bindings)) return ok(null);
+                    return typeof bindings.plan === "string" &&
+                      /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(bindings.plan)
+                      ? ok(bindings.plan)
+                      : err(new InputError("commandAgents.plan must be a profile name."));
                   },
                   availableAgents: () => {
                     const available = profiles();
@@ -282,11 +400,10 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                         )
                       : available;
                   },
-                  coordinate: (command, signal) =>
-                    context.coordinateSubagents?.(command, signal, "planning") ??
-                    Promise.resolve(
-                      err(new CapabilityError("This session cannot coordinate a planning agent.")),
-                    ),
+                  setPlanningMode: (mode) => {
+                    planningMode = mode;
+                  },
+                  coordinate: coordinatePlanning,
                 },
               ),
             ]
@@ -297,6 +414,10 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                 allowed: profile?.tools,
                 purpose: context.purpose,
                 delegating,
+                bound: context.binding !== undefined,
+                ...(context.authorizeTool
+                  ? { authorize: (name) => context.authorizeTool!(name) }
+                  : {}),
               }),
             ]
           : []),
@@ -378,20 +499,24 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       // The bare namespace prefix is not an MCP tool; it opts into strict matching.
       // leafPolicy remains authoritative for every direct and nested tool call.
       // Delegation metadata grants the host coordinator even when tools is empty.
-      ...(profile?.tools
+      ...(profile?.tools || context.purpose
         ? {
             tools: [
-              ...profile.tools,
+              ...(context.purpose
+                ? [...planningTools].filter(matcher(profile?.tools))
+                : (profile?.tools ?? [])),
               supervisorToolName,
+              ...(context.binding ? ["radian-task"] : []),
               ...(delegating ? [coordinatorTool] : []),
               "mcp__",
             ],
           }
         : {}),
       ...(context.role === "main"
-        ? { customTools: [subagentTool(coordinate)] }
+        ? { customTools: [subagentTool(coordinate), ...taskTools] }
         : {
             customTools: [
+              ...taskTools,
               supervisorTool(
                 context.contactSupervisor
                   ? (command, signal) => context.contactSupervisor!(command, signal)
@@ -489,7 +614,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           }
           const instructions = roleInstructions(profile, resourceLoader.getSkills().skills);
           if (!instructions.ok) throw instructions.error;
-          if (profile.tools) {
+          if (profile.tools && !context.purpose) {
             const registered = new Set(session.getAllTools().map((tool) => tool.name));
             const missing = profile.tools.filter(
               (name) => !name.includes("*") && !registered.has(name),
@@ -523,6 +648,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
             : undefined,
           ui,
           mcpAuth,
+          context.role === "subagent",
         );
         executor.setUiActive(context.isUiActive?.() ?? false);
         adopted = true;
@@ -633,6 +759,7 @@ export class PiSessionExecutor implements SessionExecutor {
     ) => Promise<Result<ModelRefresh, ExpectedError>>,
     private readonly ui?: ExtensionUiBridge,
     private readonly mcpAuth?: McpAuthPicker,
+    private readonly ownedChild = false,
   ) {
     this.status = this.finalStatus(false);
     // Packages may register aliases during session_start, after resource discovery.
@@ -1312,6 +1439,13 @@ export class PiSessionExecutor implements SessionExecutor {
       );
     }
 
+    const repair = parseRepairCommand(text);
+    if (!repair.ok) return Promise.resolve(repair);
+    if (repair.value)
+      return Promise.resolve(
+        err(new CapabilityError("Use the host /repair command. No model prompt was sent.")),
+      );
+
     const model = parseModelCommand(text);
     if (!model.ok) {
       return Promise.resolve(model);
@@ -1764,9 +1898,33 @@ export class PiSessionExecutor implements SessionExecutor {
     return task;
   }
 
-  notifySubagent(event: SubagentNotice, current: () => boolean = () => true): void {
-    if (this.closing || this.disposed || this.interrupting) return;
-    this.subagentNotifications.add(event, current);
+  async appendNotice(text: string): Promise<Result<void, ExpectedError>> {
+    if (this.closing || this.disposed)
+      return err(new SessionError("SESSION_NOT_OPEN", "The conversation is closing."));
+    const result = await capture(() =>
+      this.session.sendCustomMessage(
+        {
+          customType: "radian.workflow-status",
+          content: text,
+          display: true,
+        },
+        { triggerTurn: false },
+      ),
+    );
+    this.emit();
+    return result;
+  }
+
+  notifySubagent(
+    event: SubagentNotice,
+    current: () => boolean = () => true,
+    delivered?: (accepted?: boolean) => void,
+  ): void {
+    if (this.closing || this.disposed || this.interrupting) {
+      delivered?.(false);
+      return;
+    }
+    this.subagentNotifications.add(event, current, delivered);
     this.scheduleSubagentNotifications();
   }
 
@@ -1791,17 +1949,20 @@ export class PiSessionExecutor implements SessionExecutor {
       const task = capture(() =>
         this.session.sendCustomMessage(
           {
-            customType: subagentEventType,
+            customType: events.some((event) => event.type === "workflow")
+              ? "radian.workflow-event"
+              : subagentEventType,
             content: subagentNotificationText(events),
-            display: false,
+            display: events.some((event) => event.type === "workflow"),
             details: { kind: subagentNotificationKind, version: 1, events },
           },
-          { triggerTurn: true },
+          { triggerTurn: !this.ownedChild },
         ),
       );
       this.runs.add(task);
       void task
         .then((result) => {
+          this.subagentNotifications.settle(events, result.ok);
           if (!result.ok && !(result.error instanceof CancelledError)) {
             console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`);
             this.ui?.context.notify(
@@ -1810,7 +1971,10 @@ export class PiSessionExecutor implements SessionExecutor {
             );
           }
         })
-        .catch((error: unknown) => reportUnexpected(error, "subagent notification"))
+        .catch((error: unknown) => {
+          this.subagentNotifications.settle(events, false);
+          reportUnexpected(error, "subagent notification");
+        })
         .finally(() => {
           this.runs.delete(task);
           this.emit();

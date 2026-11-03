@@ -15,6 +15,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord } from "../agents/session-registry.ts";
+import { createWorkflowDocument } from "../agents/task-workflow.ts";
+import {
+  mutateWorkflow,
+  openWorkflow,
+  workflowFilePath,
+  workflowLinkFilePath,
+  writeWorkflowLink,
+} from "../agents/task-workflow-store.ts";
+import { addContinuationMember } from "../agents/verification-policy.ts";
+import { userCommandProvenance } from "../agents/repair-command.ts";
+import { ok } from "../result.ts";
 import { planFilePath, saveTaskPlan } from "../agents/task-plan-store.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { emptyPreferences, type RuntimeManifest } from "./protocol.ts";
@@ -405,6 +416,137 @@ test("A newly recreated original during orphan reservation preserves its sidecar
     // The sidecar and its index remain attached to the newly created original.
     expect(await Bun.file(planFilePath(record.sessionFile!)).exists()).toBe(true);
     expect(await Bun.file(await app.snapshot(record)).exists()).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+async function saveWorkflow(record: SessionRecord) {
+  const origin = {
+    conversationId: record.state.conversationId!,
+    cwd: record.cwd!,
+    sessionFile: record.sessionFile!,
+  };
+  const doc = createWorkflowDocument(origin, crypto.randomUUID(), 0);
+  expectOk(
+    await mutateWorkflow({ originSessionFile: origin.sessionFile }, origin, () =>
+      ok({ doc, effects: [], outcome: { kind: "applied" } }),
+    ),
+  );
+  return doc;
+}
+
+test("Q17 runtime retention removes the workflow alongside the SDK and plan", async () => {
+  // Sidecars share the conversation's lifetime, not an independent TTL.
+  const app = await fixture();
+  try {
+    const record = await app.record("workflow-expired", { age: 85, updatedAt: Date.now() + 2000 });
+    await saveWorkflow(record);
+    await app.sidecar(record);
+    expectOk(await app.store.save(app.manifest([record])));
+
+    const removed = expectOk(await app.store.pruneExpired(30, release, now));
+
+    expect(removed).toBe(1);
+    expect(await Bun.file(workflowFilePath(record.sessionFile!)).exists()).toBe(false);
+    expect(await Bun.file(planFilePath(record.sessionFile!)).exists()).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Q17 runtime retention keeps canonical safety facts for a live continuation and reports a warning", async () => {
+  // The archived origin may expire while the continuation still needs its failure ledger.
+  const app = await fixture();
+  try {
+    const origin = await app.record("workflow-origin", { age: 85, updatedAt: Date.now() + 2000 });
+    const next = await app.record("workflow-next", { open: true });
+    const doc = await saveWorkflow(origin);
+    const owner = doc.origin;
+    const nextOwner = { conversationId: next.state.conversationId!, cwd: app.cwd };
+    const location = { originSessionFile: origin.sessionFile! };
+    expectOk(
+      await mutateWorkflow(location, owner, (current) =>
+        addContinuationMember(current!, {
+          eventKey: "continue",
+          at: 1000,
+          provenance: userCommandProvenance(nextOwner.conversationId, 1000),
+          member: { ...nextOwner, sessionFile: next.sessionFile! },
+        }),
+      ),
+    );
+    expectOk(await writeWorkflowLink(next.sessionFile!, nextOwner, location, owner));
+    expectOk(await app.store.save(app.manifest([origin, next])));
+
+    const removed = expectOk(await app.store.pruneExpired(30, release, now));
+    const linked = expectOk(await openWorkflow(next.sessionFile!, nextOwner));
+
+    expect(removed).toBe(1);
+    expect(await Bun.file(origin.sessionFile!).exists()).toBe(false);
+    expect(await Bun.file(workflowFilePath(origin.sessionFile!)).exists()).toBe(true);
+    expect(await Bun.file(workflowLinkFilePath(next.sessionFile!)).exists()).toBe(true);
+    expect(app.store.retentionWarnings).toHaveLength(1);
+    expect(linked!.doc.workflowId).toBe(doc.workflowId);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Q17 runtime workflow fingerprint race preserves the SDK and restores visible history", async () => {
+  // A replacement after reservation must not inherit deletion authority from the old fingerprint.
+  const app = await fixture();
+  try {
+    const record = await app.record("workflow-race", { age: 85, updatedAt: Date.now() + 2000 });
+    await saveWorkflow(record);
+    expectOk(await app.store.save(app.manifest([record])));
+
+    const failed = await app.store.pruneExpired(
+      30,
+      () => {
+        appendFileSync(workflowFilePath(record.sessionFile!), "\n");
+        return () => {};
+      },
+      now,
+    );
+
+    expect(expectError(failed).code).toBe("CLEANUP_FAILED");
+    expect(await Bun.file(record.sessionFile!).exists()).toBe(true);
+    expect(await Bun.file(await app.snapshot(record)).exists()).toBe(true);
+    expect(app.store.isExpired("tree", record.id)).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Q17 a recreated workflow after interrupted retention is never deleted by the old marker", async () => {
+  // Cleanup can stop after SDK unlink, but its durable marker refers only to the old sidecar.
+  const app = await fixture();
+  try {
+    const record = await app.record("workflow-interrupted", {
+      age: 85,
+      updatedAt: Date.now() + 2000,
+    });
+    const doc = await saveWorkflow(record);
+    expectOk(await app.store.save(app.manifest([record])));
+    const snapshot = await app.snapshot(record);
+    expectError(
+      await app.store.pruneExpired(
+        30,
+        () => {
+          renameSync(snapshot, snapshot + ".backup");
+          mkdirSync(snapshot);
+          return () => {};
+        },
+        now,
+      ),
+    );
+    await writeFile(workflowFilePath(record.sessionFile!), JSON.stringify(doc), { mode: 0o600 });
+    await rm(snapshot, { recursive: true });
+
+    const result = await app.store.pruneExpired(null, release, now);
+
+    expect(expectError(result).code).toBe("CLEANUP_FAILED");
+    expect(await Bun.file(workflowFilePath(record.sessionFile!)).exists()).toBe(true);
   } finally {
     await app.close();
   }
