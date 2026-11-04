@@ -1,4 +1,9 @@
-import type { DashboardMetric, DashboardRanking, DashboardSnapshot } from "../dashboard.ts";
+import type {
+  DashboardAgentUsage,
+  DashboardMetric,
+  DashboardRanking,
+  DashboardSnapshot,
+} from "../dashboard.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 
 export function dashboardValue(value: number, metric: DashboardMetric = "tokens"): string {
@@ -74,6 +79,52 @@ export function dashboardTrend(
   lines.push(truncateCells(" ".repeat(axisWidth + 2) + labels, width));
 
   return lines;
+}
+
+export function dashboardAgents(rows: readonly DashboardAgentUsage[], width: number): string[] {
+  const columns = [
+    ["value", "Total"],
+    ["input", "Input"],
+    ["output", "Output"],
+    ["cacheRead", "Cache read"],
+    ["cacheWrite", "Cache write"],
+  ] as const;
+  const value = (row: DashboardAgentUsage, key: (typeof columns)[number][0]) =>
+    row[key] === undefined ? "—" : dashboardValue(row[key]);
+  const widths = columns.map(([key, heading]) =>
+    Math.max(heading.length, ...rows.map((row) => value(row, key).length)),
+  );
+  const valuesWidth = widths.reduce((sum, size) => sum + size + 2, 0);
+  const nameWidth = Math.min(34, width - valuesWidth);
+  if (nameWidth < 12) {
+    return rows.flatMap((row) => [
+      truncateCells(singleLine(row.name), width),
+      ...columns.map(([key, heading]) => truncateCells(`  ${heading}: ${value(row, key)}`, width)),
+      "",
+    ]);
+  }
+
+  const line = (name: string, values: string[]) => {
+    const text = truncateCells(singleLine(name), nameWidth);
+    return (
+      text +
+      " ".repeat(Math.max(0, nameWidth - Bun.stringWidth(text))) +
+      values.map((text, index) => `  ${text.padStart(widths[index]!)}`).join("")
+    );
+  };
+
+  return [
+    line(
+      "Agent",
+      columns.map(([, heading]) => heading),
+    ),
+    ...rows.map((row) =>
+      line(
+        row.name,
+        columns.map(([key]) => value(row, key)),
+      ),
+    ),
+  ];
 }
 
 export function dashboardBars(rows: DashboardRanking, width: number): string[] {

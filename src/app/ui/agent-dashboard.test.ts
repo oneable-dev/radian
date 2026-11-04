@@ -29,6 +29,35 @@ function sample(days: DashboardPeriod = 7): DashboardSnapshot {
   data.models = [{ name: "test/large", value: 1240 }];
   data.mcp = [{ name: "figma-remote", value: 12 }];
   data.subagents = [{ name: "reviewer", value: 3 }];
+  data.agents = [
+    {
+      kind: "main",
+      name: "Main",
+      value: 800,
+      input: 600,
+      output: 100,
+      cacheRead: 80,
+      cacheWrite: 20,
+    },
+    {
+      kind: "profile",
+      name: "engineer",
+      value: 300,
+      input: 200,
+      output: 50,
+      cacheRead: 40,
+      cacheWrite: 10,
+    },
+    {
+      kind: "profile",
+      name: "qa",
+      value: 140,
+      input: 100,
+      output: 20,
+      cacheRead: 15,
+      cacheWrite: 5,
+    },
+  ];
 
   return data;
 }
@@ -63,6 +92,7 @@ async function mount(options: Partial<WorkbenchActions> = {}, width = 120, heigh
 
       return ok(sample(days));
     },
+    keymap: expectOk(parseKeymap({ bindings: { "dashboard.show": ["<leader> u"] } })),
     ...options,
   });
   const render = async () => {
@@ -542,6 +572,125 @@ test("Resource tabs retain focus through repeated Ctrl+N/P and horizontal naviga
   }
 });
 
+test("Agents shows every direct token component and keeps call counts in a separate category", async () => {
+  // Profiles and Main have distinct direct usage, while Subagents remains a call ranking.
+  const app = await mount();
+  try {
+    app.input.value = "Retained draft";
+    await app.open();
+    app.get("dashboard-category").focus();
+
+    // Select Agents using repeated tab navigation, preserving filter focus and the draft.
+    for (let index = 0; index < 4; index++) app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    const ranking = app.get("dashboard-ranking") as TextRenderable;
+
+    // Large and compact layouts retain all components instead of truncating numeric columns.
+    for (const width of [120, 50]) {
+      app.resize(width, 32);
+      await app.render();
+      expect(ranking.plainText).toContain("Agent usage · tokens");
+      for (const text of [
+        "Main",
+        "engineer",
+        "qa",
+        "Total",
+        "Input",
+        "Output",
+        "Cache read",
+        "Cache write",
+        "800",
+        "600",
+        "300",
+        "140",
+      ]) {
+        expect(ranking.plainText).toContain(text);
+      }
+    }
+    app.mockInput.pressKey("p", { ctrl: true });
+    await app.render();
+    expect(ranking.plainText).toContain("Resource usage · calls");
+    expect(ranking.plainText).toContain("reviewer");
+    expect(ranking.plainText).not.toContain("engineer");
+    expect(app.input.value).toBe("Retained draft");
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Agents retains its selected category while period and project filters reload direct usage", async () => {
+  // Agent rows share the same historical scope as the summary and other ranking categories.
+  const app = await mount({
+    onDashboard: async (days, project) => {
+      const data = sample(days);
+      const value = project ? 2400 : days === 30 ? 1600 : 800;
+      data.agents = [
+        { kind: "main", name: "Main", value, input: value, output: 0, cacheRead: 0, cacheWrite: 0 },
+      ];
+      return ok(data);
+    },
+  });
+  try {
+    await app.open();
+    app.get("dashboard-category").focus();
+    for (let index = 0; index < 4; index++) app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+
+    // Period and project edits reload the current category rather than resetting it to Skills.
+    app.get("dashboard-period").focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    const ranking = app.get("dashboard-ranking") as TextRenderable;
+    expect(ranking.plainText).toContain("1,600");
+    app.get("dashboard-project").focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+
+    // Selected project usage replaces all-project usage without producing a model request.
+    expect(ranking.plainText).toContain("Agent usage · tokens");
+    expect(ranking.plainText).toContain("2,400");
+    expect(ranking.plainText).not.toContain("1,600");
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Legacy agent coverage shows unattributed totals and unknown components with details warnings", async () => {
+  // An older Runtime cannot provide profile identities or token component values.
+  const app = await mount({
+    onDashboard: async () => {
+      const data = sample();
+      delete data.agents;
+      return ok(data);
+    },
+  });
+  try {
+    await app.open();
+    app.get("dashboard-category").focus();
+
+    // Select the new category without requiring a Runtime restart or capability upgrade.
+    for (let index = 0; index < 4; index++) app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    const ranking = app.get("dashboard-ranking") as TextRenderable;
+
+    // Missing attribution must not become Main, named agents, or fabricated zero components.
+    expect(ranking.plainText).toContain("Unattributed");
+    expect(ranking.plainText).toContain("1,240");
+    expect(ranking.plainText).toContain("—");
+    expect(ranking.plainText).not.toContain("Main");
+    app.mockInput.pressKey("i");
+    await app.render();
+    // Usage details follows the configured details command rather than adding a popup button.
+    const details = app.get("text-dialog-body") as TextRenderable;
+    expect(details.plainText).toContain("Coverage warnings");
+    expect(details.plainText).toContain("saved agent identity");
+  } finally {
+    await app.close();
+  }
+});
+
 test("Period and project changes reaggregate by scope while half-page navigation scrolls read-only bodies", async () => {
   // Long rankings remain readable by scrolling at any screen size.
   const queries: [DashboardPeriod, string | undefined][] = [];
@@ -597,7 +746,12 @@ test("Period and project changes reaggregate by scope while half-page navigation
 test("Custom dashboard navigation updates behavior without global footer hints", async () => {
   // Preserve explicit overrides replacing default Ctrl+N.
   const keymap = expectOk(
-    parseKeymap({ bindings: { "dashboard.next": [{ keys: "q", scope: "dashboard-tabs" }] } }),
+    parseKeymap({
+      bindings: {
+        "dashboard.show": ["<leader> u"],
+        "dashboard.next": [{ keys: "q", scope: "dashboard-tabs" }],
+      },
+    }),
   );
   const app = await mount({ keymap });
   try {

@@ -6,7 +6,7 @@ import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
-import { pressLeader } from "../../testing/keys.ts";
+import { pressLeader, submitPromptCommand } from "../../testing/keys.ts";
 import { ok } from "../../result.ts";
 import type { TerminalInfo, WorkView } from "../../runtime/protocol.ts";
 
@@ -475,12 +475,18 @@ test.each(["agent", "terminal"] as const)(
   },
 );
 
-test("leader+u opens usage and popup c/n/p never changes underlying tabs", async () => {
-  // Usage and detach have separate bindings while popups own input.
+test("Usage opens only by command by default and popup c/n/p never changes underlying tabs", async () => {
+  // The old shortcut is unbound, while the prompt command still opens Usage without a model call.
   const app = await mount();
   try {
     app.leader("u");
     await app.render();
+    expect(app.renderer.root.findDescendantById("agent-dashboard")?.visible).toBe(false);
+
+    submitPromptCommand(app, "/dashboard");
+    await app.render();
+
+    // Usage keeps tab commands scoped away from the underlying Agent view.
     expect(app.renderer.root.findDescendantById("agent-dashboard")?.visible).toBe(true);
 
     const focus = app.renderer.currentFocusedRenderable;

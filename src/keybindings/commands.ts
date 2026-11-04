@@ -230,7 +230,7 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
     "workspace.last": [key("end", "workspace")],
     "workspace.half-page-up": [key("ctrl+u", "workspace"), key("ctrl+u", "search")],
     "workspace.half-page-down": [key("ctrl+d", "workspace"), key("ctrl+d", "search")],
-    "dashboard.show": [key("<leader> u")],
+    "dashboard.show": [],
     "dashboard.dismiss": [key("escape", "dashboard"), key("escape", "dashboard-tabs")],
     "dashboard.details": [key("i", "dashboard"), key("i", "dashboard-tabs")],
     "dashboard.refresh": [

@@ -9,7 +9,14 @@ export const dashboardPeriods = [1, 7, 30] as const;
 
 export type DashboardPeriod = (typeof dashboardPeriods)[number];
 
-export type DashboardCategory = "skills" | "models" | "mcp" | "subagents";
+export type DashboardCategory = "skills" | "models" | "mcp" | "subagents" | "agents";
+export type DashboardAgent =
+  | { kind: "main" }
+  | { kind: "profile"; name: string }
+  | { kind: "unattributed" };
+
+export const agentCoverageWarning =
+  "Some token usage lacks saved agent identity and is shown as Unattributed.";
 
 export type DashboardMetric = "tokens" | "runs" | "durationMs";
 
@@ -17,6 +24,19 @@ const count = Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const totalsSchema = Type.Object({ tokens: count, runs: count, durationMs: count });
 const rankingSchema = Type.Array(
   Type.Object({ name: Type.String({ minLength: 1, maxLength: 512 }), value: count }),
+  { maxItems: 10000 },
+);
+
+const agentUsageSchema = Type.Array(
+  Type.Object({
+    kind: Type.Union([Type.Literal("main"), Type.Literal("profile"), Type.Literal("unattributed")]),
+    name: Type.String({ minLength: 1, maxLength: 512 }),
+    value: count,
+    input: Type.Optional(count),
+    output: Type.Optional(count),
+    cacheRead: Type.Optional(count),
+    cacheWrite: Type.Optional(count),
+  }),
   { maxItems: 10000 },
 );
 
@@ -35,12 +55,15 @@ export const dashboardSchema = Type.Object({
   models: rankingSchema,
   mcp: rankingSchema,
   subagents: rankingSchema,
+  // Optional on the wire so older runtimes remain readable without fabricating attribution.
+  agents: Type.Optional(agentUsageSchema),
   warnings: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 100 }),
 });
 
 export type DashboardSnapshot = Static<typeof dashboardSchema>;
 
-export type DashboardRanking = DashboardSnapshot[DashboardCategory];
+export type DashboardRanking = DashboardSnapshot["models"];
+export type DashboardAgentUsage = NonNullable<DashboardSnapshot["agents"]>[number];
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -92,6 +115,7 @@ export function emptyDashboard(days: DashboardPeriod, now = Date.now()): Dashboa
     models: [],
     mcp: [],
     subagents: [],
+    agents: [],
     warnings: [],
   };
 }
@@ -120,6 +144,25 @@ export function mergeDashboards(
         }
       }
     }
+    for (const row of dashboardAgentUsage(snapshot)) {
+      const target = merged.agents!.find(
+        (entry) => entry.kind === row.kind && entry.name === row.name,
+      );
+      if (target) {
+        target.value += row.value;
+        for (const component of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+          const current = target[component];
+          const incoming = row[component];
+          if (current === undefined || incoming === undefined) {
+            delete target[component];
+          } else {
+            target[component] = current + incoming;
+          }
+        }
+      } else {
+        merged.agents!.push({ ...row });
+      }
+    }
     for (const category of ["skills", "models", "mcp", "subagents"] as const) {
       for (const row of snapshot[category]) {
         const target = merged[category].find((entry) => entry.name === row.name);
@@ -135,9 +178,29 @@ export function mergeDashboards(
     merged[category].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
   }
 
-  merged.warnings = [...new Set(snapshots.flatMap((snapshot) => snapshot.warnings))].slice(0, 100);
+  merged.agents!.sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
+  merged.warnings = [
+    ...new Set(
+      snapshots.flatMap((snapshot) => [
+        ...snapshot.warnings,
+        ...(snapshot.agents === undefined && snapshot.totals.tokens > 0
+          ? [agentCoverageWarning]
+          : []),
+      ]),
+    ),
+  ].slice(0, 100);
 
   return merged;
+}
+
+// Legacy payloads have a total but no trustworthy component or agent breakdown.
+export function dashboardAgentUsage(snapshot: DashboardSnapshot): DashboardAgentUsage[] {
+  return (
+    snapshot.agents ??
+    (snapshot.totals.tokens > 0
+      ? [{ kind: "unattributed", name: "Unattributed", value: snapshot.totals.tokens }]
+      : [])
+  );
 }
 
 // Reads raw append-only history, not projected context: compaction/branch changes must not erase usage.
@@ -148,7 +211,8 @@ export class DashboardAccumulator {
   private readonly calls = new Map<string, { name: string; args: Record<string, unknown> }>();
   private readonly skills = new Map<string, string>();
   private model = "Unattributed";
-  private readonly rankings: Record<DashboardCategory, Map<string, number>> = {
+  private readonly agentUsage = new Map<string, DashboardAgentUsage>();
+  private readonly rankings: Record<Exclude<DashboardCategory, "agents">, Map<string, number>> = {
     skills: new Map(),
     models: new Map(),
     mcp: new Map(),
@@ -160,6 +224,7 @@ export class DashboardAccumulator {
     private readonly cwd: string,
     private readonly now = Date.now(),
     private readonly seen: ReadonlySet<string> = new Set(),
+    private readonly agent: DashboardAgent = { kind: "unattributed" },
   ) {
     this.snapshot = emptyDashboard(days, now);
   }
@@ -170,7 +235,7 @@ export class DashboardAccumulator {
     }
   }
 
-  private increment(category: DashboardCategory, name: string, value = 1): void {
+  private increment(category: Exclude<DashboardCategory, "agents">, name: string, value = 1): void {
     const normalized = label(name);
     if (!normalized || !value) {
       return;
@@ -186,7 +251,12 @@ export class DashboardAccumulator {
       : undefined;
   }
 
-  private usage(value: unknown, timestamp: number, model: string): Result<void, HistoryError> {
+  private usage(
+    value: unknown,
+    timestamp: number,
+    model: string,
+    agent = this.agent,
+  ): Result<void, HistoryError> {
     if (
       !object(value) ||
       ![value.input, value.output, value.cacheRead, value.cacheWrite].every(nonnegative)
@@ -205,6 +275,29 @@ export class DashboardAccumulator {
       day.tokens += total;
       this.snapshot.totals.tokens += total;
       this.increment("models", model, total);
+      if (total > 0) {
+        const profile = agent.kind === "profile" ? label(agent.name) : "";
+        const kind = agent.kind === "profile" && !profile ? "unattributed" : agent.kind;
+        const name = kind === "main" ? "Main" : kind === "profile" ? profile : "Unattributed";
+        const key = JSON.stringify([kind, name]);
+        const row = this.agentUsage.get(key) ?? {
+          kind,
+          name: name || "Unattributed",
+          value: 0,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        };
+        row.value += total;
+        for (const component of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+          row[component] = (row[component] ?? 0) + Number(value[component]);
+        }
+        this.agentUsage.set(key, row);
+        if (kind === "unattributed") {
+          this.warn(agentCoverageWarning);
+        }
+      }
     }
 
     return ok(undefined);
@@ -321,7 +414,9 @@ export class DashboardAccumulator {
     }
     if (message.role === "toolResult") {
       if (fresh && message.usage !== undefined) {
-        const usage = this.usage(message.usage, timestamp, "Tool work (unattributed)");
+        const usage = this.usage(message.usage, timestamp, "Tool work (unattributed)", {
+          kind: "unattributed",
+        });
         if (!usage.ok) {
           return usage;
         }
@@ -441,6 +536,10 @@ export class DashboardAccumulator {
         .map(([name, value]) => ({ name, value }))
         .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
     }
+
+    this.snapshot.agents = [...this.agentUsage.values()].sort(
+      (a, b) => b.value - a.value || a.name.localeCompare(b.name),
+    );
 
     return this.snapshot;
   }

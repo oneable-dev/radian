@@ -73,10 +73,36 @@ test("Dashboard instance-fenced GET validates periods, numbers, and bucket count
       emptyDashboard(1),
       { ...emptyDashboard(7), totals: { tokens: -1, runs: 1, durationMs: 0 } },
       { ...emptyDashboard(7), daily: Array(7).fill(emptyDashboard(7).daily[0]) },
+      {
+        ...emptyDashboard(7),
+        agents: [{ kind: "profile", name: "engineer", value: 10, input: -1 }],
+      },
+      { ...emptyDashboard(7), agents: [{ kind: "unknown", name: "guessed", value: 10 }] },
     ]) {
       response = invalid;
       expect(expectError(await client.dashboard(7)).code).toBe("PROTOCOL_ERROR");
     }
+
+    // Old runtimes omit agent coverage; new runtimes carry component values without extra requests.
+    const legacy = emptyDashboard(7);
+    delete legacy.agents;
+    response = legacy;
+    expect(expectOk(await client.dashboard(7)).agents).toBeUndefined();
+    response = {
+      ...emptyDashboard(7),
+      agents: [
+        {
+          kind: "main",
+          name: "Main",
+          value: 10,
+          input: 4,
+          output: 3,
+          cacheRead: 2,
+          cacheWrite: 1,
+        },
+      ],
+    };
+    expect(expectOk(await client.dashboard(7)).agents?.[0]?.cacheWrite).toBe(1);
 
     // Cancelled requests never initiate new network calls.
     const calls = request.mock.calls.length;

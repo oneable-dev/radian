@@ -8,7 +8,12 @@ import {
   type ExpectedError,
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { DashboardAccumulator, type DashboardPeriod, type DashboardSnapshot } from "./dashboard.ts";
+import {
+  DashboardAccumulator,
+  type DashboardAgent,
+  type DashboardPeriod,
+  type DashboardSnapshot,
+} from "./dashboard.ts";
 
 const chunkBytes = 64 * 1024;
 const maximumRecordBytes = 16 * 1024 * 1024;
@@ -23,6 +28,7 @@ export async function readDashboardHistory(
   now: number,
   seen: ReadonlySet<string>,
   signal?: AbortSignal,
+  agent?: DashboardAgent,
 ): Promise<Result<HistorySummary, ExpectedError>> {
   if (signal?.aborted) {
     return err(new CancelledError());
@@ -46,7 +52,7 @@ export async function readDashboardHistory(
         return metadata;
       }
 
-      const accumulator = new DashboardAccumulator(days, expectedCwd.value, now, seen);
+      const accumulator = new DashboardAccumulator(days, expectedCwd.value, now, seen, agent);
       let pending: Buffer[] = [];
       let pendingBytes = 0;
       let position = 0;

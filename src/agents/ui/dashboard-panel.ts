@@ -6,6 +6,7 @@ import {
   type CliRenderer,
   type Renderable,
 } from "@opentui/core";
+import { agentCoverageWarning, dashboardAgentUsage } from "../dashboard.ts";
 import type {
   DashboardCategory,
   DashboardMetric,
@@ -23,7 +24,12 @@ import { PopupBody, attachPopupActivity } from "../../ui/popup-layout.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
-import { dashboardBars, dashboardTrend, dashboardValue } from "./dashboard-charts.ts";
+import {
+  dashboardAgents,
+  dashboardBars,
+  dashboardTrend,
+  dashboardValue,
+} from "./dashboard-charts.ts";
 import { ResourcePanel } from "./resource-panel.ts";
 import type { ResourceLoader } from "../../usage/process-resources.ts";
 import type { WorkspaceResourceLoader } from "../../usage/workspace-resources.ts";
@@ -56,7 +62,7 @@ export type DashboardActions = {
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
 
-const categories: DashboardCategory[] = ["skills", "models", "mcp", "subagents"];
+const categories: DashboardCategory[] = ["skills", "models", "mcp", "subagents", "agents"];
 const metrics: DashboardMetric[] = ["tokens", "runs", "durationMs"];
 const periods: DashboardPeriod[] = [1, 7, 30];
 
@@ -157,7 +163,7 @@ export class DashboardPanel {
     this.historyBody.add(this.graph);
     this.category = this.strip(
       "dashboard-category",
-      ["Skills", "Models", "MCP", "Subagents"],
+      ["Skills", "Models", "MCP", "Subagents", "Agents"],
       () => {
         this.paint();
         this.revealRankingPending = true;
@@ -343,6 +349,12 @@ export class DashboardPanel {
 
   command(command: CommandId): void {
     if (command === "dashboard.details") {
+      const warnings = [
+        ...(this.snapshot?.warnings ?? []),
+        ...(this.snapshot && this.snapshot.agents === undefined && this.snapshot.totals.tokens > 0
+          ? [agentCoverageWarning, "Agent token components are unavailable from this Runtime."]
+          : []),
+      ];
       this.actions.details?.({
         title: "Usage details",
         text: [
@@ -352,9 +364,8 @@ export class DashboardPanel {
           "",
           "Usage history",
           "Saved sessions are grouped by local calendar days. Tokens include input, output and cache. Runs/time include recorded settled runs; overlapping durations are summed. Skills combine explicit calls and successful loads. Only observed MCP/subagent calls are counted.",
-          ...(this.snapshot?.warnings.length
-            ? ["", "Coverage warnings", ...this.snapshot.warnings]
-            : []),
+          "Agents shows direct token usage for Main and saved named profiles, not descendant rollups. Unknown agent identities are Unattributed; — means a token component is unavailable. Subagents retains observed call counts, not token usage.",
+          ...(warnings.length ? ["", "Coverage warnings", ...new Set(warnings)] : []),
         ].join("\n\n"),
       });
 
@@ -518,9 +529,15 @@ export class DashboardPanel {
     this.graph.content = graph.join("\n");
 
     const category = categories[this.category.index]!;
-    const rows = snapshot?.[category] ?? [];
+    const rows = snapshot
+      ? category === "agents"
+        ? dashboardAgentUsage(snapshot)
+        : snapshot[category]
+      : [];
     const ranking = snapshot
-      ? dashboardBars(rows, width)
+      ? category === "agents"
+        ? dashboardAgents(dashboardAgentUsage(snapshot), width)
+        : dashboardBars(rows, width)
       : [this.loading ? "" : "No statistics available."];
     const empty = !!snapshot && !rows.length;
 
@@ -531,7 +548,11 @@ export class DashboardPanel {
       ? ""
       : new StyledText([
           styleChunk(
-            category === "models" ? "Model usage · tokens\n" : "Resource usage · calls\n",
+            category === "agents"
+              ? "Agent usage · tokens\n"
+              : category === "models"
+                ? "Model usage · tokens\n"
+                : "Resource usage · calls\n",
             styles["ui.muted"],
           ),
           styleChunk(ranking.join("\n"), styles["ui.label"]),

@@ -168,22 +168,25 @@ to the next remaining workspace, or back to its existing CHAT view when none rem
 These are defaults; commands can be remapped or disabled. `<leader>` is `<C-Space>`
 unless you configure another sequence.
 
-| Keys                                | Action                                                             |
-| ----------------------------------- | ------------------------------------------------------------------ |
-| `<leader>m` / `a` / `e` / `g` / `t` | Select Chat / Agent / Editor / Git / Terminal directly.            |
-| `<leader>b`                         | Toggle workspace search; `/` focuses search from the results.      |
-| `<leader>c`                         | Create an agent session or terminal in the current view.           |
-| `<leader>n` / `<leader>p`           | Next / previous tab in Agent or Terminal, wrapping at either end.  |
-| `<leader>u`                         | Show full-screen usage; `<Esc>` returns to the previous work view. |
-| `<leader>1` … `<leader>9`           | Select an agent session or terminal tab by position.               |
-| `<leader>s`                         | Monitor agent sessions.                                            |
-| `<leader>[`                         | Read and select output in Chat, Agent, or Terminal.                |
-| `<leader>d`                         | Detach the interface; keep the runtime running.                    |
-| `<leader>?`                         | Open keyboard help.                                                |
+| Keys                                | Action                                                            |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `<leader>m` / `a` / `e` / `g` / `t` | Select Chat / Agent / Editor / Git / Terminal directly.           |
+| `<leader>b`                         | Toggle workspace search; `/` focuses search from the results.     |
+| `<leader>c`                         | Create an agent session or terminal in the current view.          |
+| `<leader>n` / `<leader>p`           | Next / previous tab in Agent or Terminal, wrapping at either end. |
+| `<leader>1` … `<leader>9`           | Select an agent session or terminal tab by position.              |
+| `<leader>s`                         | Monitor agent sessions.                                           |
+| `<leader>[`                         | Read and select output in Chat, Agent, or Terminal.               |
+| `<leader>d`                         | Detach the interface; keep the runtime running.                   |
+| `<leader>?`                         | Open keyboard help.                                               |
 
 Run `/history` in the Chat or Agent prompt to browse saved conversations. History has
 no default global shortcut; `history.show` remains available for custom keybindings.
 
+Run `/dashboard` in the Chat or Agent prompt to open Usage; `<Esc>` returns to the previous
+work view. Usage has no default global shortcut; `dashboard.show` remains configurable.
+The Agents tab breaks down direct token consumption by Main and named agent profiles; Subagents
+retains execution call counts. Unknown ownership is shown as Unattributed, not guessed.
 In Usage, `i` opens measurement details and history coverage warnings. Workspace CPU/RAM
 covers Radian's editor and terminal process trees; shared Agent execution stays in Runtime.
 

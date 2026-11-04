@@ -18,7 +18,12 @@ import {
   type HistoryPreview,
 } from "./history-preview.ts";
 import type { SessionSnapshotSource } from "./session-snapshot.ts";
-import { mergeDashboards, type DashboardPeriod, type DashboardSnapshot } from "./dashboard.ts";
+import {
+  mergeDashboards,
+  type DashboardAgent,
+  type DashboardPeriod,
+  type DashboardSnapshot,
+} from "./dashboard.ts";
 import { readDashboardHistory } from "./dashboard-history.ts";
 
 export type HistoryItem = {
@@ -32,7 +37,11 @@ export type HistoryItem = {
   readonly unavailableReason: string | null;
 };
 
-type SavedHistory = HistoryItem & { readonly path: string; readonly requireCwd?: boolean };
+type SavedHistory = HistoryItem & {
+  readonly path: string;
+  readonly parentPath?: string;
+  readonly requireCwd?: boolean;
+};
 
 type HistoryIndex = {
   readonly cwd: string;
@@ -90,7 +99,7 @@ export class SessionHistory {
           (item) =>
             lifecycles.get(item.id) !== "open" && !item.openSessionId && !item.unavailableReason,
         )
-        .map(({ path: _path, requireCwd: _requireCwd, ...item }) => item),
+        .map(({ path: _path, parentPath: _parentPath, requireCwd: _requireCwd, ...item }) => item),
     );
   }
 
@@ -277,6 +286,40 @@ export class SessionHistory {
     const files = new Set<string>();
     const summaries: DashboardSnapshot[] = [];
     const warnings: string[] = [];
+    const histories = new Map<string, { item: SavedHistory; cwd: string }>();
+    const agents = new Map<string, DashboardAgent>();
+    const successful = new Set<string>();
+    const uncertainLineage = new Set<string>();
+    const loaded = new Set<string>();
+    const mains = new Set<string>();
+    const attribute = async (path: string | undefined, agent: DashboardAgent) => {
+      if (!path) {
+        return;
+      }
+
+      const canonical = await capture(() => realpath(path));
+      if (!canonical.ok) {
+        warnings.push(`Some saved agent identities could not be read [${canonical.error.code}].`);
+        return;
+      }
+      const previous = agents.get(canonical.value);
+      agents.set(
+        canonical.value,
+        previous && JSON.stringify(previous) !== JSON.stringify(agent)
+          ? { kind: "unattributed" }
+          : agent,
+      );
+    };
+    const recordAgents = async (record: SessionRecord) => {
+      if (record.role === "subagent") {
+        await attribute(record.sessionFile, { kind: "profile", name: record.name });
+      } else if (record.sessionFile && record.ownedSubagents !== undefined) {
+        mains.add(record.sessionFile);
+      }
+      for (const child of record.ownedSubagents ?? []) {
+        await attribute(child.sessionFile, { kind: "profile", name: child.name });
+      }
+    };
     let sharedSessions: readonly SessionInfo[] | undefined;
     for (const tree of repositorySnapshot(this.repositories).flatMap(
       (repository) => repository.worktrees,
@@ -302,22 +345,94 @@ export class SessionHistory {
         return index;
       }
       for (const item of index.value.items) {
+        histories.set(item.path, { item, cwd: index.value.cwd });
+      }
+
+      // Read durable ownership, never UI names, prompts, tool summaries or profile catalogs.
+      const current = this.registry.checkpointRecords.filter(
+        (record) => record.worktreeId === tree.id,
+      );
+      for (const saved of this.snapshots?.listSessions(tree.id) ?? []) {
         if (signal?.aborted) {
           return err(new CancelledError());
         }
-        if (files.has(item.path)) {
+
+        const live = current.find(
+          (record) =>
+            (record.state.conversationId ?? record.id) === (saved.conversationId ?? saved.id),
+        );
+        const key = JSON.stringify([tree.id, saved.conversationId ?? saved.id]);
+        if (live || loaded.has(key)) {
           continue;
         }
 
+        loaded.add(key);
+        const record = await this.snapshots!.readSession(tree.id, saved.conversationId ?? saved.id);
+        if (signal?.aborted) {
+          return err(new CancelledError());
+        }
+        if (!record.ok) {
+          if (record.error.code === "CANCELLED") {
+            return record;
+          }
+
+          warnings.push(`Some saved agent identities could not be read [${record.error.code}].`);
+        } else if (record.value) {
+          await recordAgents(record.value);
+        }
+      }
+      for (const record of current) {
+        if (signal?.aborted) {
+          return err(new CancelledError());
+        }
+
+        await recordAgents(record);
+      }
+    }
+
+    // Older code-child snapshots omit both role and ownedSubagents, so only known owners
+    // supply Main evidence. A resumed child can be an owner too; conflicting roles stay unattributed.
+    for (const path of mains) {
+      if (signal?.aborted) {
+        return err(new CancelledError());
+      }
+
+      await attribute(path, { kind: "main" });
+    }
+
+    // Visit fork sources before their copies, across worktrees as well as within each index.
+    // Shared entry IDs then retain the source's attribution rather than the newest file's role.
+    for (const history of histories.values()) {
+      const chain: (typeof history)[] = [];
+      const active = new Set<string>();
+      let next: typeof history | undefined = history;
+      while (next && !files.has(next.item.path) && !active.has(next.item.path)) {
+        chain.push(next);
+        active.add(next.item.path);
+        next = next.item.parentPath ? histories.get(next.item.parentPath) : undefined;
+      }
+      const cycle = !!next && active.has(next.item.path);
+      for (const { item, cwd } of chain.reverse()) {
+        if (signal?.aborted) {
+          return err(new CancelledError());
+        }
+
         files.add(item.path);
+        const missingSource = !!item.parentPath && !successful.has(item.parentPath);
+        const uncertain =
+          cycle || missingSource || (!!item.parentPath && uncertainLineage.has(item.parentPath));
+        if (uncertain) {
+          uncertainLineage.add(item.path);
+        }
 
         const summary = await readDashboardHistory(
           item.path,
-          index.value.cwd,
+          cwd,
           days,
           now,
           seen,
           signal,
+          uncertain ? { kind: "unattributed" } : agents.get(item.path),
         );
         if (!summary.ok) {
           if (summary.error.code === "CANCELLED") {
@@ -327,7 +442,7 @@ export class SessionHistory {
           warnings.push(`A conversation was excluded [${summary.error.code}]. Refresh to retry.`);
           continue;
         }
-
+        successful.add(item.path);
         summaries.push(summary.value.snapshot);
         for (const identity of summary.value.identities) {
           seen.add(identity);
@@ -473,6 +588,14 @@ export class SessionHistory {
         return file;
       }
 
+      const parent = session.parentSessionPath
+        ? await capture(() => realpath(session.parentSessionPath!))
+        : undefined;
+      const parentPath = parent?.ok
+        ? parent.value
+        : session.parentSessionPath
+          ? resolve(session.parentSessionPath)
+          : undefined;
       const revision = `${file.value.ino}:${file.value.size}:${file.value.mtimeNs}:${file.value.ctimeNs}`;
       const ownership = this.registry.historyOwnership(path.value);
 
@@ -480,6 +603,7 @@ export class SessionHistory {
         id: session.id,
         revision,
         path: path.value,
+        ...(parentPath ? { parentPath } : {}),
         requireCwd: session.requireCwd,
         worktreeId,
         title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session")

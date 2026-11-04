@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   DashboardAccumulator,
+  agentCoverageWarning,
   dashboardDate,
   emptyDashboard,
   mergeDashboards,
@@ -289,6 +290,7 @@ test("Saved workflow children aggregate by actual agent and warn about missing m
     { name: "implementer", value: 1 },
   ]);
   expect(result.warnings).toEqual([
+    agentCoverageWarning,
     "Some subagent workflows lack stored child metadata and are excluded.",
     "Some scripted MCP calls lack stored server metadata and are excluded.",
   ]);
@@ -323,4 +325,113 @@ test("Invalid usage returns stable history errors instead of becoming zero", () 
 
   // Return explicit errors so callers can show partial-aggregation warnings.
   expect(expectError(result).code).toBe("HISTORY_CORRUPT");
+});
+
+test("Agent usage keeps direct token components separate from descendants and nested tool work", () => {
+  // Each child owns its own history; nested tool usage has no saved actor identity.
+  const main = new DashboardAccumulator(7, "/repo", now, new Set(), { kind: "main" });
+  const engineer = new DashboardAccumulator(7, "/repo", now, main.identities, {
+    kind: "profile",
+    name: "engineer",
+  });
+  expectOk(
+    main.add(
+      assistant("root", [
+        call("child", "radian-subagent", {
+          action: "spawn",
+          agent: "engineer",
+        }),
+      ]),
+    ),
+  );
+  expectOk(engineer.add(assistant("child")));
+  expectOk(
+    main.add(
+      message("nested", {
+        role: "toolResult",
+        toolCallId: "child",
+        usage,
+        content: [],
+        details: { results: [{ agent: "engineer", usage }] },
+      }),
+    ),
+  );
+
+  // Merge direct histories without rolling the child's totals into Main.
+  const result = mergeDashboards([main.finish(), engineer.finish()], 7, now);
+
+  // Cache subcategories and tool summaries must never inflate consumption.
+  expect(result.agents).toEqual([
+    {
+      kind: "profile",
+      name: "engineer",
+      value: 210,
+      input: 100,
+      output: 20,
+      cacheRead: 80,
+      cacheWrite: 10,
+    },
+    {
+      kind: "main",
+      name: "Main",
+      value: 210,
+      input: 100,
+      output: 20,
+      cacheRead: 80,
+      cacheWrite: 10,
+    },
+    {
+      kind: "unattributed",
+      name: "Unattributed",
+      value: 210,
+      input: 100,
+      output: 20,
+      cacheRead: 80,
+      cacheWrite: 10,
+    },
+  ]);
+  expect(result.totals.tokens).toBe(630);
+  expect(result.subagents).toEqual([{ name: "engineer", value: 1 }]);
+  expect(result.warnings).toEqual([agentCoverageWarning]);
+});
+
+test("Agent tokens obey the selected period and deduplicate forked entry identities", () => {
+  // A copied parent response keeps its source attribution even inside a differently named child.
+  const main = new DashboardAccumulator(1, "/repo", now, new Set(), { kind: "main" });
+  expectOk(main.add(assistant("shared")));
+  const qa = new DashboardAccumulator(1, "/repo", now, main.identities, {
+    kind: "profile",
+    name: "qa",
+  });
+
+  // Old and future responses add neither token totals nor agent rows.
+  expectOk(qa.add(assistant("shared")));
+  expectOk(qa.add(message("old", { role: "assistant", usage, content: [] }, now - 86400000)));
+  expectOk(qa.add(message("future", { role: "assistant", usage, content: [] }, now + 1)));
+  expectOk(qa.add(assistant("new")));
+  const result = mergeDashboards([qa.finish(), main.finish()], 1, now);
+
+  // Each unique in-period response belongs to exactly one direct actor.
+  expect(result.totals.tokens).toBe(420);
+  expect(result.agents?.map(({ name, value }) => ({ name, value }))).toEqual([
+    { name: "Main", value: 210 },
+    { name: "qa", value: 210 },
+  ]);
+  expect(result.warnings).toEqual([]);
+});
+
+test("Legacy dashboard totals remain unattributed with unknown components when merged", () => {
+  // Older runtimes expose token totals but do not provide agent or component coverage.
+  const legacy = emptyDashboard(7, now);
+  delete legacy.agents;
+  legacy.totals.tokens = 300;
+  const known = new DashboardAccumulator(7, "/repo", now);
+  expectOk(known.add(assistant("unknown-actor")));
+
+  // Combine old and current runtime payloads without fabricating zero components.
+  const result = mergeDashboards([legacy, known.finish()], 7, now);
+
+  // Missing historical identities cannot become Main or a guessed profile.
+  expect(result.agents).toEqual([{ kind: "unattributed", name: "Unattributed", value: 510 }]);
+  expect(result.warnings).toEqual([agentCoverageWarning]);
 });

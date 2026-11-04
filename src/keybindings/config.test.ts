@@ -38,6 +38,23 @@ test("History has no default shortcut while explicit user mappings remain availa
   );
 });
 
+test("Usage has no default shortcut while explicit user mappings remain available", () => {
+  // Usage opens from the prompt unless a user deliberately configures a shortcut.
+  const defaults = defaultKeymap();
+  const custom = expectOk(parseKeymap({ bindings: { "dashboard.show": ["<leader> u"] } }));
+
+  // The removed sequence must stay available for custom mappings in every input context.
+  for (const context of ["prompt", "transcript", "editor", "terminal", "none"] as const) {
+    expect(defaults.hints("dashboard.show", context)).toBe("");
+    expect(custom.hints("dashboard.show", context)).toBe("<leader>u");
+  }
+
+  expect(defaults.bindings.some((binding) => binding.command === "dashboard.show")).toBe(false);
+  expect(defaults.bindings.some((binding) => binding.keys.join(" ") === "ctrl+space u")).toBe(
+    false,
+  );
+});
+
 test("Reader defaults omit transcript search without removing popup search commands", () => {
   // Transcript readers no longer own search keys, while searchable popups keep their command map.
   const map = defaultKeymap();
@@ -217,7 +234,7 @@ test("Output navigation uses only leader+[ and removes auxiliary input-return/te
   );
 });
 
-test("Creation, detach, usage, and tab defaults never collide and input focus has no default binding", () => {
+test("Creation, detach, and tab defaults never collide while Usage and input focus remain unbound", () => {
   // Shared actions receive one leader sequence per command regardless of input context.
   const map = defaultKeymap();
 
@@ -234,7 +251,7 @@ test("Creation, detach, usage, and tab defaults never collide and input focus ha
     expect(map.hints("tab.next", context)).toBe("<leader>n");
     expect(map.hints("tab.previous", context)).toBe("<leader>p");
     expect(map.hints("app.detach", context)).toBe("<leader>d");
-    expect(map.hints("dashboard.show", context)).toBe("<leader>u");
+    expect(map.hints("dashboard.show", context)).toBe("");
     expect(map.hints("focus.prompt", context)).toBe("");
   }
 });

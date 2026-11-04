@@ -15,7 +15,7 @@ const surfaces = [
   { name: "Workspace", panel: "workspace-sidebar", leader: "b" },
   { name: "History (custom binding)", panel: "history-dialog", customBinding: "h" },
   { name: "Monitor", panel: "monitor-dialog", leader: "s" },
-  { name: "Usage", panel: "dashboard-panel", leader: "u" },
+  { name: "Usage", panel: "dashboard-panel", command: "/dashboard" },
   { name: "Model", panel: "model-dialog", command: "/model" },
   { name: "Accounts", panel: "accounts-dialog", command: "/accounts" },
   { name: "Help", panel: "text-dialog-panel", help: true },

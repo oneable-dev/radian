@@ -1364,11 +1364,11 @@ Finish existing jobs before explicitly restarting an old runtime to load the new
 
 ### Agent Dashboard
 
-Open **/dashboard** from the Agent input, or press **Ctrl+Space u** (the configured leader followed
-by `u`). Usage fills the work area, leaving the shared **USAGE** footer visible. Opening it never
-sends a model prompt or interrupts work. Esc restores the previous view and focus while preserving
-drafts; the usual view commands also switch directly to Agent, Editor, Git or Terminal. The opening
-shortcut is configurable as `dashboard.show`.
+Open **/dashboard** from the Chat or Agent input. Usage has no default global shortcut;
+`dashboard.show` remains available for custom keybindings. Usage fills the work area, leaving the
+shared **USAGE** footer visible. Opening it never sends a model prompt or interrupts work. Esc
+restores the previous view and focus; custom shortcuts preserve the current draft. The usual view
+commands also switch directly to Agent, Editor, Git or Terminal.
 
 **Radian resources** shows current CPU and resident memory for this **UI**, the **Runtime**, and
 their **Shared** subtotal. Runtime is counted once, regardless of how many repository channels share
@@ -1395,8 +1395,8 @@ Measurement explanations and historical coverage warnings are available on deman
 **Usage history** retains **total tokens**, **recorded runs**, and **total run time** above a daily
 bar chart. Select Tokens, Runs or Run time to change the chart. Today, 7-day and 30-day filters use
 local calendar dates; Project cycles between all discovered repositories and individual projects.
-These filters affect only saved usage, never live process resources. The category tabs show
-horizontal bars with exact values:
+These filters affect only saved usage, never live process resources. Category tabs show exact
+values; call and model rankings use horizontal bars, while Agents shows a token-component table:
 
 - **Skills:** explicit skill commands and successful skill-file loads combined by skill name.
 - **Models:** input, output, cache-read and cache-write tokens grouped by provider/model. Reasoning
@@ -1404,9 +1404,15 @@ horizontal bars with exact values:
   Tool-reported nested model usage without a model identity is shown as **Tool work (unattributed)**.
 - **MCP:** recorded server calls, including structured nested calls, without double-counting gateway
   wrappers. Native server metadata preserves the original server name when available.
-- **Subagents:** execution calls grouped by agent name, not a main-versus-child token comparison.
+- **Subagents:** execution calls grouped by agent name, separate from token consumption.
   Management requests such as list/status are excluded; structured workflow child results are counted
   when present. Scripts without stored server/child metadata report a coverage warning, not invented counts.
+- **Agents:** direct token consumption for **Main** and saved named profiles, with **Total**, **Input**,
+  **Output**, **Cache read** and **Cache write** columns. Parents do not include their descendants' usage.
+  Saved ownership metadata connects profiles to session files; unknown or conflicting identities and
+  tool-reported nested usage remain **Unattributed**, with coverage warnings in Details. Older runtimes
+  without agent breakdowns show their token total as Unattributed and unavailable components as **—**.
+  Compact layouts stack component values instead of dropping columns.
 
 Tab/Shift+Tab moves between filters, chart metric, resource tabs and the read-only body. Tab strips
 support Ctrl+N/P and h/l; the body supports Ctrl+N/P, j/k, Home/End and Ctrl+D/U half-page scrolling.
@@ -1414,9 +1420,10 @@ Configured bindings are listed in Help, not the footer. Use r or Ctrl+R to
 refresh both live resources and saved statistics. History lookups run on open, filter changes and
 explicit refresh, not on every rendered frame; live sampling never changes focus or scroll.
 
-Statistics come from bounded, read-only scans of the discovered SDK session files, including closed
-sessions and raw pre-compaction/alternate-branch history. Shared entry identities copied by forks are
-counted once within a repository. Run counts and duration use Radian's recorded settled-run metadata;
+Token statistics come from bounded, read-only scans of the discovered SDK session files, including
+closed sessions and raw pre-compaction/alternate-branch history. Agent identity lookup additionally
+reads saved session snapshots through the existing snapshot API. Shared entry identities copied by
+forks are counted once within a repository. Run counts and duration use Radian's recorded settled-run metadata;
 older conversations without it still contribute tokens but cannot supply reliable run timing. Times
 are summed elapsed run durations (including overlapping work), not time spent at the keyboard.
 Expired/deleted histories are not reconstructed. Missing/corrupt records and unsupported repository
@@ -1751,7 +1758,7 @@ changes the active session/shell without focusing the header; input stays in the
 area when it already owns focus. Creation uses the separate
 **Ctrl+Space, then c** sequence, not **Ctrl+N** or bare `n`.
 
-The default leader is **Ctrl+Space**. Press and release it, then press `d` to detach radian or `u` to open the usage dashboard,
+The default leader is **Ctrl+Space**. Press and release it, then press `d` to detach radian,
 `m`/`a`/`e`/`g`/`t` to select Chat/Agent/Editor/Git/Terminal, `b` to toggle workspace navigation,
 or `s` to monitor working sessions and unread results. Opening workspace navigation focuses search;
 from its results list, `/` returns to search without changing the query.

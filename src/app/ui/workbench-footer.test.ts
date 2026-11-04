@@ -9,6 +9,8 @@ import type { HistoryItem } from "../../agents/history.ts";
 import type { ExecutionState } from "../../agents/session-registry.ts";
 import { ok } from "../../result.ts";
 import { icons } from "../../icons.ts";
+import { parseKeymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 
 const saved = (id: string, unavailableReason: string | null = null): HistoryItem => ({
   id,
@@ -229,9 +231,11 @@ test.each([120, 60])(
   },
 );
 
-test("Popups keep view badges and restore the focused reader mode on dismissal", async () => {
-  // Popup search remains available, and the reader's selection must survive overlays.
-  const app = await mount();
+test("Popups and custom Usage bindings restore the focused reader mode on dismissal", async () => {
+  // An explicit Usage shortcut opens from a reader without changing its selection or draft.
+  const app = await mount(undefined, {
+    keymap: expectOk(parseKeymap({ bindings: { "dashboard.show": ["alt+u"] } })),
+  });
   try {
     pressLeader(app, "[");
     app.mockInput.pressEnter();
@@ -248,7 +252,7 @@ test("Popups keep view badges and restore the focused reader mode on dismissal",
     expect(app.badge()).toBe("VISUAL");
 
     // Usage owns its view badge rather than inheriting the background selection mode.
-    pressLeader(app, "u");
+    app.mockInput.pressKey("u", { meta: true });
     await app.renderOnce();
     expect(app.badge()).toBe("USAGE");
     app.mockInput.pressEscape();

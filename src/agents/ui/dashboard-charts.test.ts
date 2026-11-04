@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
-import { emptyDashboard } from "../dashboard.ts";
-import { dashboardBars, dashboardTrend, dashboardValue } from "./dashboard-charts.ts";
+import { emptyDashboard, type DashboardAgentUsage } from "../dashboard.ts";
+import {
+  dashboardAgents,
+  dashboardBars,
+  dashboardTrend,
+  dashboardValue,
+} from "./dashboard-charts.ts";
 
 test("Inactive graphs retain zero values and dates without drawing fabricated activity", () => {
   // Empty data is a valid zero, unlike missing-data errors.
@@ -58,3 +63,31 @@ test("Run durations and tokens display distinct units", () => {
   expect(time).toBe("1h 1m");
   expect(consumption).toBe("123,456");
 });
+
+test.each([40, 80, 112])(
+  "%d-column agent tables preserve component values and terminal cell bounds",
+  (width) => {
+    // Unicode profiles and large counts must not displace adjacent numeric columns.
+    const rows: DashboardAgentUsage[] = [
+      {
+        kind: "profile",
+        name: "한글 👩🏽‍💻 engineer",
+        value: 123456,
+        input: 100000,
+        output: 20000,
+        cacheRead: 3000,
+        cacheWrite: 456,
+      },
+      { kind: "unattributed", name: "Unattributed", value: 10 },
+    ];
+
+    // Wide tables become stacked rows when all five values cannot fit beside the name.
+    const lines = dashboardAgents(rows, width);
+
+    // Unknown components remain unknown, and every component stays visible at supported widths.
+    for (const text of ["123,456", "100,000", "20,000", "3,000", "456", "—"]) {
+      expect(lines.join("\n")).toContain(text);
+    }
+    for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width);
+  },
+);
