@@ -31,6 +31,26 @@ async function mount(onPrompt: NonNullable<WorkbenchActions["onPrompt"]>) {
   };
 }
 
+test("invalid workflow input stays in the composer without dispatching a model prompt", async () => {
+  // Malformed host commands must fail locally, before transport or model submission.
+  const sent: string[] = [];
+  const app = await mount((_id, text) => {
+    sent.push(text);
+    return ok(undefined);
+  });
+  try {
+    await app.mockInput.typeText("/workflow confirm");
+    app.mockInput.pressEnter();
+    await app.renderOnce();
+
+    expect(sent).toEqual([]);
+    expect(app.view.promptDrafts.a1).toBe("/workflow confirm");
+    expect(app.captureCharFrame()).toContain("Usage: /workflow");
+  } finally {
+    await app.close();
+  }
+});
+
 test("Repeated Enter before acceptance never duplicates submissions and rejection preserves drafts", async () => {
   // A delayed transport result makes input acceptance independent from the existing run.
   const pending = Promise.withResolvers<Result<void, ExpectedError>>();

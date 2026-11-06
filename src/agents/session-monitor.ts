@@ -26,11 +26,12 @@ export function monitoredSessions(
         const working =
           session.status === "working" ||
           session.subagents.some((child) => child.status === "working");
-        if (!working && !session.attention) {
+        if (!working && !session.attention && !session.workflow) {
           continue;
         }
 
-        const title = session.request?.text || session.attention?.request?.text || session.name;
+        const request = session.request?.text || session.attention?.request?.text || session.name;
+        const title = session.workflow ? `${request} [${session.workflow}]` : request;
         if (!matches(`${title} ${repository.name} ${tree.name} ${tree.branch ?? ""}`)) {
           continue;
         }

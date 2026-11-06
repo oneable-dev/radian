@@ -2,6 +2,8 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { WorkflowError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import { strictEffectiveProfileSnapshotSchema } from "./effective-profile.ts";
+import { workflowConsentSchema } from "./workflow-consent-schema.ts";
 
 const text = Type.String({ minLength: 1, maxLength: 65536 });
 const integer = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
@@ -28,7 +30,84 @@ export const workflowBindingSchema = Type.Object(
   { additionalProperties: false },
 );
 export type WorkflowBinding = Static<typeof workflowBindingSchema>;
-export const workflowTaskSchema = Type.Object(
+export const workflowScheduleStateSchema = enumeration(
+  "queued",
+  "admitting",
+  "running",
+  "awaiting-answer",
+  "blocked",
+  "paused",
+  "interrupted",
+  "cancelled",
+  "ready-for-review",
+);
+export type WorkflowScheduleState = Static<typeof workflowScheduleStateSchema>;
+export const workflowScheduleSchema = Type.Object(
+  {
+    state: workflowScheduleStateSchema,
+    invocationId: Type.Optional(text),
+    reason: Type.Optional(text),
+    since: integer,
+  },
+  { additionalProperties: false },
+);
+export const workflowAdmissionStateSchema = enumeration(
+  "reserved",
+  "launching",
+  "running",
+  "completed",
+  "interrupted",
+  "cancelled",
+  "failed",
+);
+export type WorkflowAdmissionState = Static<typeof workflowAdmissionStateSchema>;
+export const workflowSchedulerSchema = Type.Object(
+  {
+    invocations: Type.Array(
+      Type.Object(
+        {
+          id: text,
+          kind: enumeration("plan", "execute"),
+          state: enumeration("active", "paused", "cancelled", "completed"),
+          consentId: Type.Optional(text),
+          createdAt: integer,
+          baselineRevision: Type.Optional(integer),
+          invalidations: Type.Optional(Type.Record(Type.String(), integer)),
+          schedules: Type.Optional(Type.Record(Type.String(), workflowScheduleSchema)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    admissions: Type.Record(
+      Type.String(),
+      Type.Object(
+        {
+          taskId: text,
+          invocationId: Type.Optional(text),
+          boundRevision: Type.Optional(integer),
+          declaredRevision: Type.Optional(integer),
+          questions: Type.Optional(Type.Array(text, { uniqueItems: true })),
+          stopReason: Type.Optional(enumeration("obsolete", "cancelled", "paused")),
+          submittedRevision: Type.Optional(integer),
+          defectId: Type.Optional(text),
+          attemptId: Type.Optional(text),
+          role: workflowBindingSchema.properties.role,
+          assignmentVersion: integer,
+          frozenInputs: Type.Array(Type.String({ pattern: "^.+@[0-9]+$" })),
+          effectiveProfile: strictEffectiveProfileSnapshotSchema,
+          state: workflowAdmissionStateSchema,
+          runId: Type.Optional(text),
+        },
+        { additionalProperties: false },
+      ),
+      { additionalProperties: false },
+    ),
+    consents: Type.Record(Type.String(), workflowConsentSchema, { additionalProperties: false }),
+  },
+  { additionalProperties: false },
+);
+// Model-authored task declarations cannot set host-owned scheduler state.
+export const workflowTaskInputSchema = Type.Object(
   {
     id: text,
     title: text,
@@ -54,6 +133,10 @@ export const workflowTaskSchema = Type.Object(
     status: enumeration("open", "analysis-pending", "human-required", "cancelled", "verified"),
     planArtifact: Type.Optional(text),
   },
+  { additionalProperties: false },
+);
+export const workflowTaskSchema = Type.Object(
+  { ...workflowTaskInputSchema.properties, schedule: Type.Optional(workflowScheduleSchema) },
   { additionalProperties: false },
 );
 export type WorkflowTask = Static<typeof workflowTaskSchema>;
@@ -149,7 +232,7 @@ export const workflowOutcomeSchema = Type.Object(
   { additionalProperties: false },
 );
 export type WorkflowOutcome = Static<typeof workflowOutcomeSchema>;
-export const workflowDocumentSchema = Type.Object(
+export const workflowDocumentV1Schema = Type.Object(
   {
     version: Type.Literal(1),
     workflowId: Type.String({
@@ -183,7 +266,7 @@ export const workflowDocumentSchema = Type.Object(
         { additionalProperties: false },
       ),
     ]),
-    tasks: Type.Record(Type.String(), workflowTaskSchema),
+    tasks: Type.Record(Type.String(), workflowTaskInputSchema),
     defects: Type.Record(Type.String(), workflowDefectSchema),
     artifacts: Type.Record(
       Type.String(),
@@ -236,6 +319,21 @@ export const workflowDocumentSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+export const workflowDocumentV2Schema = Type.Object(
+  {
+    ...workflowDocumentV1Schema.properties,
+    version: Type.Literal(2),
+    tasks: Type.Record(Type.String(), workflowTaskSchema),
+    scheduler: Type.Optional(workflowSchedulerSchema),
+  },
+  { additionalProperties: false },
+);
+export const workflowDocumentSchema = Type.Union([
+  workflowDocumentV1Schema,
+  workflowDocumentV2Schema,
+]);
+export type WorkflowDocumentV1 = Static<typeof workflowDocumentV1Schema>;
+export type WorkflowDocumentV2 = Static<typeof workflowDocumentV2Schema>;
 export type WorkflowDocument = Static<typeof workflowDocumentSchema>;
 export type WorkflowEffect = {
   kind: "notify-root" | "notify-leads" | "notify-qa" | "needs-attention";
@@ -256,9 +354,15 @@ export function validateWorkflowDocument(value: unknown): Result<WorkflowDocumen
     return err(new WorkflowError("WORKFLOW_CONFLICT", "Invalid or unsupported workflow document."));
   const reserved = new Set(Object.getOwnPropertyNames(Object.prototype));
   if (
-    [value.tasks, value.defects, value.artifacts, value.processed].some((records) =>
-      Object.keys(records).some((key) => reserved.has(key)),
-    )
+    [
+      value.tasks,
+      value.defects,
+      value.artifacts,
+      value.processed,
+      ...(value.version === 2 && value.scheduler
+        ? [value.scheduler.admissions, value.scheduler.consents]
+        : []),
+    ].some((records) => Object.keys(records).some((key) => reserved.has(key)))
   )
     return err(
       new WorkflowError("WORKFLOW_CONFLICT", "Workflow IDs cannot name object internals."),
@@ -293,6 +397,45 @@ export function validateWorkflowDocument(value: unknown): Result<WorkflowDocumen
   ) {
     return err(new WorkflowError("WORKFLOW_CONFLICT", "Invalid workflow safety facts."));
   }
+  if (
+    value.version === 2 &&
+    (Object.values(value.tasks).some(
+      (task) =>
+        task.schedule?.state === "queued" &&
+        !["dependencies", "capacity", "worktree"].includes(task.schedule.reason ?? ""),
+    ) ||
+      (value.scheduler &&
+        (new Set(value.scheduler.invocations.map((invocation) => invocation.id)).size !==
+          value.scheduler.invocations.length ||
+          Object.values(value.scheduler.admissions).some(
+            (admission) => !Object.hasOwn(value.tasks, admission.taskId),
+          ) ||
+          Object.entries(value.scheduler.consents).some(
+            ([id, receipt]) =>
+              receipt.id !== id ||
+              receipt.workflowId !== value.workflowId ||
+              !value.members.some((member) => member.conversationId === receipt.conversationId) ||
+              receipt.taskIds.some((taskId) => value.tasks[taskId]?.kind !== "implement") ||
+              (receipt.approval !== undefined &&
+                (receipt.approval.provenance.conversationId !== receipt.conversationId ||
+                  receipt.approval.provenance.receivedAt !== receipt.createdAt ||
+                  JSON.stringify(receipt.approval.tasks.map((task) => task.taskId)) !==
+                    JSON.stringify(receipt.taskIds) ||
+                  receipt.approval.tasks.some((task) =>
+                    [task.lead, task.implementer, task.verifier].some(
+                      (name) => !Object.hasOwn(receipt.approval!.profiles, name),
+                    ),
+                  ))) ||
+              (receipt.state === "confirmed" && receipt.confirmedAt === undefined),
+          ) ||
+          value.scheduler.invocations.some(
+            (invocation) =>
+              invocation.kind === "execute" &&
+              (!invocation.consentId ||
+                !Object.hasOwn(value.scheduler!.consents, invocation.consentId)),
+          ))))
+  )
+    return err(new WorkflowError("WORKFLOW_CONFLICT", "Invalid workflow scheduler facts."));
   return ok(value);
 }
 

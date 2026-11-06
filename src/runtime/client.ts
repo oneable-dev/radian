@@ -54,6 +54,7 @@ import { TranscriptStore } from "./transcript-frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
 import { parseHistoryCommand } from "../agents/history-command.ts";
 import { parseRepairCommand } from "../agents/repair-command.ts";
+import { parseWorkflowCommand } from "../agents/workflow-command.ts";
 import { parseDashboardCommand } from "../agents/dashboard-command.ts";
 import {
   accountRequestSchema,
@@ -1472,6 +1473,32 @@ export class RuntimeClient {
     text: string,
     images: readonly string[] = [],
   ): Promise<Result<void, ExpectedError>> {
+    const workflow = parseWorkflowCommand(text);
+    if (!workflow.ok) return workflow;
+    if (workflow.value) {
+      if (images.length)
+        return err(
+          new InputError("/workflow does not accept image attachments. Input was retained."),
+        );
+      if (!this.state.capabilities?.includes("workflow-scheduling"))
+        return err(
+          new CapabilityError(
+            "Running service predates /workflow. Restart it explicitly when ready. No prompt was sent.",
+          ),
+        );
+      const conversationId = this.state.details[sessionId]?.conversationId;
+      if (!conversationId)
+        return err(
+          new ProtocolError(
+            "Current conversation identity is unavailable; no workflow command was sent.",
+          ),
+        );
+      const result = await this.command(
+        { type: "workflow-control", sessionId, conversationId, command: workflow.value },
+        { instance: this.state.instance, epoch: this.connectionEpoch },
+      );
+      return result.ok ? ok(undefined) : result;
+    }
     const repair = parseRepairCommand(text);
     if (!repair.ok) return repair;
     if (repair.value) {

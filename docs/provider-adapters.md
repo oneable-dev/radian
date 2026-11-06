@@ -91,6 +91,106 @@ SDK authentication exception is not confirmed evidence that interactive login is
 account recovery reuses credential-bound quota evidence and account-scoped cooldowns instead of
 introducing a separate authentication probe loop; see [Account authentication recovery](account-reauthentication.md).
 
+## Host tool contracts and strict generation
+
+Radian's task, plan, subagent and supervisor tools declare a single object with an
+explicit string action enum and optional action fields. Canonical plan, review,
+analysis and task bodies remain closed objects. This preserves their shapes through
+Claude Code's schema normalization and the native Messages nonstrict projection.
+
+Strict generation is **best effort**, never required. Converter acceptance is not
+sufficient: OpenAI's strict conversion makes every optional field required and
+nullable. A closed selected action rejects those unused fields, so shared host
+action declarations with optional slots explicitly opt out of strict sampling.
+This preserves minimal calls such as `{ "action": "status" }` without allowing
+null-filled or cross-action payloads through host validation. Action-only schemas
+without optional slots may still request `json_schema` / `strict: prefer` when
+the installed converter accepts them. Providers can additionally fall back when
+their strict subset does not support a schema keyword.
+
+**Host validation is the only guarantee.** The host validates the raw arguments
+against the exact selected-action schema before Pi can coerce values or remove
+optional nulls. Unknown/missing/alias actions return `TOOL_ACTION_UNKNOWN`;
+selected-action field failures return `TOOL_ACTION_FIELDS`, JSON pointers and one
+canonical skeleton. Plan graph failures and unavailable agents return
+`PLAN_INVALID_SHAPE`. No aliases, extra fields or null placeholders are silently
+repaired. The validator returns a Result. At Pi's `prepareArguments` SDK boundary,
+a failed Result must become a tool error before SDK normalization; `execute`
+validates again defensively.
+
+A bound lead receives at most one automatic publication-correction continuation
+per artifact ID and host-owned run, shared across structural and graph failures.
+Successful publication clears the pending failure, not the spent budget. Exhaustion
+settles with a blocked reason and retains the last valid artifact. Invalid bodies
+never create revisions. This budget is independent of defect and repair counters;
+correction does not authorize file changes or task execution.
+
+## Subscription-only request routing
+
+Production repository and CHAT hosts enable subscription-only routing for their
+parent and child sessions. The model picker lists only `claude-code` with
+`claude-code-stream-json` at `process://claude-code`, and `openai-codex` with
+`openai-codex-responses` at `https://chatgpt.com/backend-api` (an optional single
+trailing slash is accepted; credentials, query, fragment and normalized URL aliases
+are not). Native Anthropic, direct OpenAI APIs, aliases and custom endpoint overrides
+are not approved generation routes. Offline fixtures and embedded SDK tests opt into
+this policy explicitly; they never establish real billing entitlement.
+
+Filtering is not the permission boundary. Radian checks the exact provider/API/baseUrl
+allowlist on direct selection, explicit agent profiles and every agent SDK request.
+Account-bound requests are checked again after credentials resolve, using the resolved
+baseUrl and merged process/auth environment. A host-local ModelRuntime facade also
+checks model-object auth resolutions before and after auth resolution, including the
+resolved baseUrl and merged process/auth/request environment. This covers extension
+registry completions, routed physical models and deferred responses outside the agent
+stream. These checks enforce the route allowlist and the usage-credit environment
+restriction below; they do not reject arbitrary environment overrides. SDK cache warming
+also uses this runtime. Radian disables warming for all hosted parent and child sessions
+with a session-local settings getter, including after resource reload. Pi 1.2.0 reads
+this global-only setting outside `applyOverrides()`, so an effective-settings override
+alone is insufficient. The getter override does not persist changes to the user's global
+`cacheWarming` preference. Classifier and image generation through that runtime are blocked
+when they do not use an approved subscription route. Provider-string auth reads for account and
+quota observations are not generation authorization. An existing conversation with a
+blocked selection remains readable and selectable, but cannot generate until the user
+chooses an approved provider. No automatic provider substitution or API fallback
+occurs, and no global profile, credential or account preference is rewritten.
+
+For `claude-code`, Radian itself rejects a nonempty
+`PI_CLAUDE_CODE_ALLOW_USAGE_CREDITS` override until the user unsets it. This is the
+only environment variable rejected by Radian's subscription policy. Policy failures
+use typed `SUBSCRIPTION_ROUTE_BLOCKED` or `SUBSCRIPTION_EXTRA_USAGE_ENABLED` errors.
+Agent prompt Results surface these codes only when the policy rejection is the
+terminal agent-request cause; a handled nested tool rejection must not replace a
+later unrelated transport failure or successful result.
+
+Auth/backend environment refusal is enforced by the external `pi-claude-code`
+extension, not by Radian. The verified version is **0.1.0**. In its
+`src/claude-cli.ts`, `launchPlan` calls `processEnvironment` and
+`conflictingEnvironment` before process acquisition or spawn, checking the merged
+`process.env` and request environment (`options.env`). It refuses nonempty
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_FOUNDRY_API_KEY`, and enabled `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` flags. Independent QA verified
+refusal before spawn for all seven variables from each environment source (14 cases).
+Subscription-only routing relies on this extension behavior; extension updates require
+re-verification of this boundary rather than assuming Radian enforces these checks.
+
+Account-level Claude usage credits must also be disabled by the user. An approved CLI
+route is **not a guarantee of zero extra charges**: the external CLI/provider owns
+entitlement and charge detection may occur after a request. Radian does not inspect
+or modify Claude Code credentials or reverse charges.
+
+Footer subscription quotas are independent account-usage observations, not proof
+that a model request is authorized on that account or transport. Usage-only
+native account connections are not relabelled as Claude Code accounts; Claude
+Code continues to own its separate login.
+
+This policy guards Radian-hosted SDK generation, not arbitrary process activity.
+Extensions and tools remain trusted executable code: direct HTTP calls, external
+commands, raw provider functions or separately created runtimes are not sandboxed by
+this routing policy. Review those integrations separately before enabling them.
+
 ## Verification boundary
 
 Tests use isolated temporary SDK sessions and loopback/injected-fetch provider fixtures.

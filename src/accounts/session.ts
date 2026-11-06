@@ -1,18 +1,24 @@
 import { cleanupSessionResources, ModelsError } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AccountManager } from "./manager.ts";
+import { validateSubscriptionRoute } from "../providers/subscription-policy.ts";
 
 // Pin credentials at each model-request boundary, not at the start of an agent/tool run.
 export function bindAccountSession(
   manager: AccountManager,
   worktreeId: string,
   session: AgentSession,
+  subscriptionsOnly = false,
 ): () => void {
   const original = session.agent.streamFunction;
   const scopes = new Set<string>();
 
   session.agent.streamFunction = (model, context, options) =>
     manager.request(worktreeId, async (runtime, identity) => {
+      if (subscriptionsOnly) {
+        const allowed = validateSubscriptionRoute(model, { ...process.env, ...options?.env });
+        if (!allowed.ok) throw allowed.error;
+      }
       const auth = await runtime.getAuth(model, options?.signal ? { signal: options.signal } : {});
       if (!auth) {
         throw new ModelsError(
@@ -21,6 +27,12 @@ export function bindAccountSession(
         );
       }
 
+      const selectedModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
+      if (subscriptionsOnly) {
+        // Credentials may supply endpoint/environment overrides after the outer SDK guard.
+        const allowed = validateSubscriptionRoute(selectedModel, { ...process.env, ...auth.env });
+        if (!allowed.ok) throw allowed.error;
+      }
       const sessionId = manager.transportScope(options?.sessionId ?? session.sessionId, auth);
       scopes.add(sessionId);
 
@@ -42,27 +54,23 @@ export function bindAccountSession(
         ),
       );
 
-      return original(
-        auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model,
-        context,
-        {
-          ...rest,
-          sessionId,
-          ...(auth.auth.apiKey !== undefined ? { apiKey: auth.auth.apiKey } : {}),
-          headers: { ...headers, ...auth.auth.headers },
-          ...(auth.env ? { env: auth.env } : {}),
-          onResponse: async (response, model) => {
-            if (current()) {
-              await options?.onResponse?.(response, model);
-            }
-          },
-          onProviderStreamEvent: async (event, model) => {
-            if (current()) {
-              await options?.onProviderStreamEvent?.(event, model);
-            }
-          },
+      return original(selectedModel, context, {
+        ...rest,
+        sessionId,
+        ...(auth.auth.apiKey !== undefined ? { apiKey: auth.auth.apiKey } : {}),
+        headers: { ...headers, ...auth.auth.headers },
+        ...(auth.env ? { env: auth.env } : {}),
+        onResponse: async (response, model) => {
+          if (current()) {
+            await options?.onResponse?.(response, model);
+          }
         },
-      );
+        onProviderStreamEvent: async (event, model) => {
+          if (current()) {
+            await options?.onProviderStreamEvent?.(event, model);
+          }
+        },
+      });
     });
 
   return () => {

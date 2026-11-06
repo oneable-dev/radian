@@ -1,3 +1,6 @@
+// Applies only when the host explicitly enables deterministic planning scheduling.
+export const schedulerInstructions = `Read-only planning scheduler mode is enabled. During hierarchical /plan, this overrides the model-driven spawn/wait guidance: declare relevant branches, then observe radian-plan report and answer owned questions with radian-subagent reply. The host admits ready leads, freezes prerequisite refs, queues capacity and refreshes obsolete coverage. Do not spawn branch leads, poll status/wait, or implement. Questions do not stop independent branches. Cancellation retains artifacts and is not confirmed until owned cleanup settles. /plan --single is unchanged.`;
+
 // Runtime API guidance is host-owned, independent of optional workflow skills.
 export const subagentInstructions = {
   main: `<radian_subagents role="parent">

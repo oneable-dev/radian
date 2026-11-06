@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { expectError, expectOk } from "../testing/results.ts";
+import { expectWorkflowMigrationRoundTrip } from "../testing/workflow-migration.ts";
 import {
   createWorkflowDocument,
   MAX_PROCESSED_EVENTS,
@@ -19,11 +20,12 @@ test("Q08 workflow schema rejects unknown versions and incomplete safety records
   const doc = createWorkflowDocument(origin, workflowId, 0);
 
   const valid = validateWorkflowDocument(doc);
-  const unknown = validateWorkflowDocument({ ...doc, version: 2 });
+  const unknown = validateWorkflowDocument({ ...doc, version: 3 });
   const incomplete = validateWorkflowDocument({ ...doc, processed: undefined });
   const noOrigin = validateWorkflowDocument({ ...doc, members: [] });
 
   expect(expectOk(valid)).toEqual(doc);
+  expectWorkflowMigrationRoundTrip(doc);
   for (const result of [unknown, incomplete, noOrigin])
     expect(expectError(result).code).toBe("WORKFLOW_CONFLICT");
 });
@@ -66,12 +68,14 @@ test("Q14 optional resolution receipts validate task responsibility without brea
   ).doc;
   delete doc.manifest!.declaredAt;
   expect(expectOk(validateWorkflowDocument(doc))).toEqual(doc);
+  expectWorkflowMigrationRoundTrip(doc);
 
   // Receipt keys must belong to this defect, and declaration timestamps must be integers.
   doc.defects.defect!.resolutions = {
     branch: { revision: 0, eventKey: "passed", at: 3 },
   };
   expect(expectOk(validateWorkflowDocument(doc))).toEqual(doc);
+  expectWorkflowMigrationRoundTrip(doc);
   doc.defects.defect!.resolutions.other = {
     revision: 0,
     eventKey: "forged",
@@ -101,12 +105,15 @@ test("Q08 planning correlation metadata is optional in version one and revisions
   };
   expect(expectOk(validateWorkflowDocument(doc))).toEqual(doc);
 
+  expectWorkflowMigrationRoundTrip(doc);
+
   // Metadata extends the existing schema without changing the document version.
   doc.manifest.declaredRevision = 1;
   doc.manifest.branches = ["branch"];
   doc.artifacts.plan.revisions[0]!.docRevision = 2;
   doc.artifacts.plan.revisions[0]!.dependencies = [{ artifactId: "upstream", revision: 1 }];
   expect(expectOk(validateWorkflowDocument(doc))).toEqual(doc);
+  expectWorkflowMigrationRoundTrip(doc);
   doc.artifacts.plan.revisions[0]!.docRevision = 1.5;
   expect(expectError(validateWorkflowDocument(doc)).code).toBe("WORKFLOW_CONFLICT");
   doc.artifacts.plan.revisions[0]!.docRevision = 2;
@@ -137,6 +144,7 @@ test("Q06 informational logs are bounded without evicting processed safety recei
   expect(result.log).toHaveLength(256);
   expect(result.log[0]!.eventKey).toBe("old-1");
   expect(Object.keys(result.processed)).toEqual(["old-event", "new-event"]);
+  expectWorkflowMigrationRoundTrip(result);
 });
 
 test("Q06 reaching the safety ledger cap fails closed instead of resetting receipts", () => {
@@ -147,6 +155,8 @@ test("Q06 reaching the safety ledger cap fails closed instead of resetting recei
       docRevision: 0,
       outcome: { kind: "applied" },
     };
+
+  expectWorkflowMigrationRoundTrip(doc);
 
   const result = declareScope(doc, {
     eventKey: "overflow",

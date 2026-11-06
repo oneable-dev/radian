@@ -23,6 +23,7 @@ export type Subagent = {
 
 // Display snapshots have no ownership of Pi agents or saved session records.
 export type OpenSession = {
+  readonly workflow?: string;
   readonly id: string;
   readonly name: string;
   readonly status: AgentStatus | null;

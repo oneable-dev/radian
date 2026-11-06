@@ -828,6 +828,7 @@ class SharedDaemon {
         "session-attention",
         "session-controls",
         "task-repair",
+        "workflow-scheduling",
         "session-tab-commands",
         "session-exit",
         "agent-interrupt",

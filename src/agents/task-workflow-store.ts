@@ -18,6 +18,7 @@ import {
   validateWorkflowDocument,
   workflowOwnerSchema,
   type WorkflowDocument,
+  type WorkflowDocumentV2,
   type WorkflowMutation,
   type WorkflowOwner,
   type WorkflowPolicyResult,
@@ -27,6 +28,8 @@ export type WorkflowLocation = { originSessionFile: string };
 export type OpenedWorkflow = { doc: WorkflowDocument; location: WorkflowLocation };
 export const workflowFilePath = (sessionFile: string) => sessionFile + ".workflow.json";
 export const workflowLinkFilePath = (sessionFile: string) => sessionFile + ".workflow-link.json";
+export const workflowBackupFilePath = (sessionFile: string) =>
+  sessionFile + ".workflow-v1-backup.json";
 const linkSchema = Type.Object(
   {
     workflowId: Type.String(),
@@ -48,7 +51,16 @@ export const inspectedWorkflowSchema = Type.Union([
   Type.Object({ kind: Type.Literal("absent") }),
   Type.Object({
     kind: Type.Literal("ready"),
-    sidecar: Type.Union([Type.Literal("origin"), Type.Literal("link")]),
+    sidecar: Type.Union([Type.Literal("origin"), Type.Literal("link"), Type.Literal("backup")]),
+    backupFingerprint: Type.Optional(
+      Type.Object({
+        dev: Type.Number(),
+        ino: Type.Number(),
+        size: Type.Number(),
+        mtimeMs: Type.Number(),
+        ctimeMs: Type.Number(),
+      }),
+    ),
     fingerprint: Type.Object({
       dev: Type.Number(),
       ino: Type.Number(),
@@ -119,7 +131,9 @@ async function verifyParent(sessionFile: string): Promise<Result<void, ExpectedE
 }
 async function readPrivate(
   path: string,
-): Promise<Result<{ value: unknown; fingerprint: WorkflowFingerprint } | null, ExpectedError>> {
+): Promise<
+  Result<{ value: unknown; fingerprint: WorkflowFingerprint; text: string } | null, ExpectedError>
+> {
   const parent = await verifyParent(path);
   if (!parent.ok && !absent(parent.error)) return parent;
   const found = await capture(() => lstat(path));
@@ -155,9 +169,10 @@ async function readPrivate(
           !sameFile(fingerprint(before), fingerprint(await file.stat()))
         )
           return storageFailure("Workflow sidecar changed while reading.");
-        const parsed = parseJson(buffer.subarray(0, length).toString("utf8"), "workflow sidecar");
+        const text = buffer.subarray(0, length).toString("utf8");
+        const parsed = parseJson(text, "workflow sidecar");
         return parsed.ok
-          ? ok({ value: parsed.value, fingerprint: fingerprint(before) })
+          ? ok({ value: parsed.value, fingerprint: fingerprint(before), text })
           : storageFailure("Corrupt workflow sidecar.");
       },
       () => file.close(),
@@ -219,18 +234,33 @@ async function verifySdkOwner(
 async function readOrigin(
   sessionFile: string,
   owner: WorkflowOwner,
+  path = workflowFilePath(sessionFile),
 ): Promise<
-  Result<{ doc: WorkflowDocument; fingerprint: WorkflowFingerprint } | null, ExpectedError>
+  Result<
+    { doc: WorkflowDocument; fingerprint: WorkflowFingerprint; text: string } | null,
+    ExpectedError
+  >
 > {
   if (!validOwner(owner)) return storageFailure("Invalid workflow owner.");
-  const read = await readPrivate(workflowFilePath(sessionFile));
+  const read = await readPrivate(path);
   if (!read.ok) return read;
   if (!read.value) return ok(null);
   const parsed = validateWorkflowDocument(read.value.value);
   if (!parsed.ok) return storageFailure("Invalid or unsupported workflow document.");
   if (!sameOwner(parsed.value.origin, owner) || parsed.value.origin.sessionFile !== sessionFile)
     return storageFailure("Workflow owner or origin path mismatch.");
-  return ok({ doc: parsed.value, fingerprint: read.value.fingerprint });
+  return ok({ doc: parsed.value, fingerprint: read.value.fingerprint, text: read.value.text });
+}
+async function readMigrationBackup(sessionFile: string, owner: WorkflowOwner, workflowId?: string) {
+  const read = await readOrigin(sessionFile, owner, workflowBackupFilePath(sessionFile));
+  if (!read.ok) return read;
+  if (
+    read.value &&
+    (read.value.doc.version !== 1 ||
+      (workflowId !== undefined && read.value.doc.workflowId !== workflowId))
+  )
+    return storageFailure("Migration backup does not match the origin workflow.");
+  return read;
 }
 async function readLink(
   sessionFile: string,
@@ -347,7 +377,14 @@ async function atomicWrite(
   expected: WorkflowFingerprint | null,
   overrides?: Partial<WorkflowWriteIO>,
 ): Promise<Result<void, ExpectedError>> {
-  const text = JSON.stringify(value);
+  return atomicWriteText(path, JSON.stringify(value), expected, overrides);
+}
+async function atomicWriteText(
+  path: string,
+  text: string,
+  expected: WorkflowFingerprint | null,
+  overrides?: Partial<WorkflowWriteIO>,
+): Promise<Result<void, ExpectedError>> {
   if (Buffer.byteLength(text) > maxBytes)
     return storageFailure(
       "Workflow sidecar exceeds its storage size limit; safety facts were not evicted.",
@@ -390,11 +427,54 @@ async function atomicWrite(
     ),
   );
 }
+/** Pure, lossless conversion. Revision advancement belongs to the scheduler commit. */
+export function migrateWorkflowToV2(doc: WorkflowDocument): WorkflowDocumentV2 {
+  return { ...structuredClone(doc), version: 2 };
+}
+
+/** One private, atomic backup follows the origin sidecar's retention lifecycle. */
+async function writeMigrationBackup(
+  sessionFile: string,
+  doc: WorkflowDocument,
+  text: string,
+  overrides?: Partial<WorkflowWriteIO>,
+): Promise<Result<void, ExpectedError>> {
+  const existing = await readMigrationBackup(sessionFile, doc.origin, doc.workflowId);
+  if (!existing.ok) return existing;
+  return atomicWriteText(
+    workflowBackupFilePath(sessionFile),
+    text,
+    existing.value?.fingerprint ?? null,
+    overrides,
+  );
+}
+
+/** Scheduler storage may extend safety history, never erase repair ownership or receipts. */
+function preservesWorkflowHistory(before: WorkflowDocument, after: WorkflowDocument): boolean {
+  return (
+    Object.keys(before.processed).every((key) => Object.hasOwn(after.processed, key)) &&
+    Object.entries(before.defects).every(([id, defect]) => {
+      const next = after.defects[id];
+      return (
+        next !== undefined &&
+        next.automatedFailures >= defect.automatedFailures &&
+        (!defect.locked || next.locked) &&
+        defect.attempts.every((attempt) => next.attempts.some((item) => item.id === attempt.id))
+      );
+    })
+  );
+}
+
 export function mutateWorkflow(
   location: WorkflowLocation,
   owner: WorkflowOwner,
   mutate: (doc: WorkflowDocument | null) => WorkflowPolicyResult,
-  options?: { expectedRevision?: number | null; io?: Partial<WorkflowWriteIO> },
+  options?: {
+    expectedRevision?: number | null;
+    io?: Partial<WorkflowWriteIO>;
+    /** Scheduler writes only. Ordinary host operations MUST leave v1 documents at v1. */
+    requireVersion?: 2;
+  },
 ): Promise<Result<WorkflowMutation, ExpectedError>> {
   const sessionFile = location.originSessionFile;
   return serialized(workflowFilePath(sessionFile), async () => {
@@ -410,9 +490,19 @@ export function mutateWorkflow(
       ? await verifyOriginAvailable(current)
       : await verifySdkOwner(sessionFile, owner);
     if (!sdk.ok) return sdk;
-    const result = mutate(current ? structuredClone(current) : null);
+    const migrating = current?.version === 1 && options?.requireVersion === 2;
+    const input = current
+      ? options?.requireVersion === 2
+        ? migrateWorkflowToV2(current)
+        : structuredClone(current)
+      : null;
+    const result = mutate(input);
     if (!result.ok) return result;
-    const validated = validateWorkflowDocument(result.value.doc);
+    const candidate =
+      options?.requireVersion === 2 ? migrateWorkflowToV2(result.value.doc) : result.value.doc;
+    // A migration-only scheduler write still commits exactly one document revision.
+    if (migrating && candidate.revision === current.revision) candidate.revision += 1;
+    const validated = validateWorkflowDocument(candidate);
     if (!validated.ok) return validated;
     const next = validated.value;
     const serialized = parseJson(JSON.stringify(next), "workflow mutation");
@@ -421,8 +511,10 @@ export function mutateWorkflow(
     if (
       !sameOwner(next.origin, owner) ||
       next.origin.sessionFile !== sessionFile ||
+      (!current && next.version === 2 && options?.requireVersion !== 2) ||
       (current &&
-        (next.workflowId !== current.workflowId ||
+        ((next.version !== current.version && !migrating) ||
+          next.workflowId !== current.workflowId ||
           (next.revision !== current.revision + 1 &&
             JSON.stringify(current) !== JSON.stringify(next))))
     )
@@ -432,15 +524,60 @@ export function mutateWorkflow(
           "Mutation changed identity or did not advance exactly one revision.",
         ),
       );
+    if (current && (migrating || current.version === 2) && !preservesWorkflowHistory(current, next))
+      return err(
+        new WorkflowError("WORKFLOW_CONFLICT", "Mutation erased workflow safety history."),
+      );
+    if (
+      current?.version === 2 &&
+      Object.entries(current.scheduler?.admissions ?? {}).some(
+        ([operationId, admission]) =>
+          admission.runId !== undefined &&
+          (next.version !== 2 ||
+            next.scheduler?.admissions[operationId]?.runId !== admission.runId),
+      )
+    )
+      return err(
+        new WorkflowError("WORKFLOW_CONFLICT", "An admission runId cannot change or disappear."),
+      );
+    if (
+      current?.version === 2 &&
+      Object.entries(current.scheduler?.consents ?? {}).some(([id, receipt]) => {
+        const updated = next.version === 2 ? next.scheduler?.consents[id] : undefined;
+        if (!updated) return true;
+        const {
+          state: previousState,
+          confirmedAt: previousConfirmation,
+          ...previousFacts
+        } = receipt;
+        const { state: nextState, confirmedAt: nextConfirmation, ...nextFacts } = updated;
+        return (
+          JSON.stringify(previousFacts) !== JSON.stringify(nextFacts) ||
+          (previousState === "revoked" && nextState !== "revoked") ||
+          (previousState === "confirmed" && nextState === "preview") ||
+          (previousConfirmation !== undefined && previousConfirmation !== nextConfirmation)
+        );
+      })
+    )
+      return err(
+        new WorkflowError(
+          "WORKFLOW_CONFLICT",
+          "Execution consent facts cannot change or disappear.",
+        ),
+      );
     if (current && JSON.stringify(current) === JSON.stringify(next))
       return ok({ ...result.value, effects: [] });
+    if (migrating && read.value) {
+      const backup = await writeMigrationBackup(sessionFile, current, read.value.text, options?.io);
+      if (!backup.ok) return backup;
+    }
     const saved = await atomicWrite(
       workflowFilePath(sessionFile),
       next,
       read.value?.fingerprint ?? null,
       options?.io,
     );
-    return saved.ok ? result : saved;
+    return saved.ok ? ok({ ...result.value, doc: next }) : saved;
   });
 }
 
@@ -501,7 +638,10 @@ async function inspectRetention(
   if (!origin.ok) return origin;
   const link = await readLink(sessionFile, owner);
   if (!link.ok) return link;
-  if (origin.value && link.value) return storageFailure("Ambiguous workflow sidecars.");
+  const backup = await readMigrationBackup(sessionFile, owner, origin.value?.doc.workflowId);
+  if (!backup.ok) return backup;
+  if ((origin.value || backup.value) && link.value)
+    return storageFailure("Ambiguous workflow sidecars.");
   if (origin.value) {
     const live = await liveContinuation(origin.value.doc);
     if (!live.ok) return live;
@@ -509,10 +649,19 @@ async function inspectRetention(
       kind: "ready",
       sidecar: "origin",
       fingerprint: origin.value.fingerprint,
+      ...(backup.value ? { backupFingerprint: backup.value.fingerprint } : {}),
       updatedAt: origin.value.doc.log.at(-1)?.at ?? 0,
       retained: live.value,
     });
   }
+  if (backup.value)
+    return ok({
+      kind: "ready",
+      sidecar: "backup",
+      fingerprint: backup.value.fingerprint,
+      updatedAt: backup.value.doc.log.at(-1)?.at ?? 0,
+      retained: false,
+    });
   if (link.value)
     return ok({
       kind: "ready",
@@ -529,13 +678,17 @@ export function inspectWorkflowForRetention(
 ): Promise<Result<InspectedWorkflow, ExpectedError>> {
   return serialized(workflowFilePath(sessionFile), () => inspectRetention(sessionFile, owner));
 }
-function unchanged(a: InspectedWorkflow, b: InspectedWorkflow): boolean {
+/** A missing backup is safe cleanup progress; a new or replaced file never inherits authority. */
+export function workflowRetentionMatches(a: InspectedWorkflow, b: InspectedWorkflow): boolean {
   return a.kind === "absent"
     ? b.kind === "absent"
     : b.kind === "ready" &&
         a.sidecar === b.sidecar &&
         a.retained === b.retained &&
-        sameFile(a.fingerprint, b.fingerprint);
+        sameFile(a.fingerprint, b.fingerprint) &&
+        (b.backupFingerprint === undefined ||
+          (a.backupFingerprint !== undefined &&
+            sameFile(a.backupFingerprint, b.backupFingerprint)));
 }
 export function recheckWorkflowForRetention(
   sessionFile: string,
@@ -545,7 +698,7 @@ export function recheckWorkflowForRetention(
   return serialized(workflowFilePath(sessionFile), async () => {
     const current = await inspectRetention(sessionFile, owner);
     return current.ok
-      ? unchanged(expected, current.value)
+      ? workflowRetentionMatches(expected, current.value)
         ? ok(undefined)
         : storageFailure("Workflow changed during retention cleanup.")
       : current;
@@ -559,17 +712,22 @@ export function deleteWorkflowForRetention(
   return serialized(workflowFilePath(sessionFile), async () => {
     const current = await inspectRetention(sessionFile, owner);
     if (!current.ok) return current;
-    if (!unchanged(expected, current.value))
+    if (!workflowRetentionMatches(expected, current.value))
       return storageFailure("Workflow changed before retention removal.");
     if (current.value.kind === "absent") return ok("absent");
     if (current.value.retained) return ok("retained");
-    const removed = await capture(() =>
-      unlink(
-        current.value.kind === "ready" && current.value.sidecar === "origin"
-          ? workflowFilePath(sessionFile)
-          : workflowLinkFilePath(sessionFile),
-      ),
-    );
+    // Remove the backup first so an interrupted origin unlink cannot strand private history.
+    if (current.value.sidecar === "origin" && current.value.backupFingerprint) {
+      const removedBackup = await capture(() => unlink(workflowBackupFilePath(sessionFile)));
+      if (!removedBackup.ok && !absent(removedBackup.error)) return removedBackup;
+    }
+    const path =
+      current.value.sidecar === "origin"
+        ? workflowFilePath(sessionFile)
+        : current.value.sidecar === "backup"
+          ? workflowBackupFilePath(sessionFile)
+          : workflowLinkFilePath(sessionFile);
+    const removed = await capture(() => unlink(path));
     return removed.ok ? ok("removed") : removed;
   });
 }

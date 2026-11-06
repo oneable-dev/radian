@@ -9,6 +9,11 @@ export const usageErrorCodes = [
 ] as const;
 export const errorCodes = [
   "INVALID_INPUT",
+  "TOOL_ACTION_UNKNOWN",
+  "TOOL_ACTION_FIELDS",
+  "PLAN_INVALID_SHAPE",
+  "SUBSCRIPTION_ROUTE_BLOCKED",
+  "SUBSCRIPTION_EXTRA_USAGE_ENABLED",
   "SESSION_NOT_OPEN",
   "SESSION_BUSY",
   "SESSION_CONFLICT",
@@ -20,6 +25,12 @@ export const errorCodes = [
   "BROWSER_UNAVAILABLE",
   "CANCELLED",
   "AGENT_FAILED",
+  "AGENT_TOOL_CEILING",
+  "AGENT_OVERLAY_WIDENS",
+  "AGENT_OVERLAY_FIELD",
+  "AGENT_SKILL_MISSING",
+  "AGENT_MODEL_UNAVAILABLE",
+  "AGENT_NAME_COLLISION",
   "CLEANUP_FAILED",
   "HISTORY_UNAVAILABLE",
   "HISTORY_CORRUPT",
@@ -31,6 +42,7 @@ export const errorCodes = [
   "WORKFLOW_REPAIR_LOCKED",
   "WORKFLOW_NOT_FOUND",
   "WORKFLOW_CONFLICT",
+  "WORKFLOW_TRANSITION_INVALID",
   "RUNTIME_ABSENT",
   "CONNECTION_FAILED",
   "CONNECTION_TIMEOUT",
@@ -71,9 +83,59 @@ export class ExpectedError<C extends ErrorCode = ErrorCode> extends Error {
   }
 }
 
+export type AgentConfigErrorCode =
+  | "AGENT_OVERLAY_WIDENS"
+  | "AGENT_OVERLAY_FIELD"
+  | "AGENT_SKILL_MISSING"
+  | "AGENT_MODEL_UNAVAILABLE"
+  | "AGENT_NAME_COLLISION";
+
+export type AgentConfigDiagnostic = {
+  readonly code: AgentConfigErrorCode;
+  readonly message: string;
+  readonly path?: string;
+};
+
+export class AgentConfigError extends ExpectedError<AgentConfigErrorCode> {
+  constructor(
+    code: AgentConfigErrorCode,
+    message: string,
+    readonly path?: string,
+  ) {
+    super(code, message);
+  }
+}
+
+export class AgentToolCeilingError extends ExpectedError<"AGENT_TOOL_CEILING"> {
+  constructor(message: string) {
+    super("AGENT_TOOL_CEILING", message);
+  }
+}
+
 export class InputError extends ExpectedError<"INVALID_INPUT"> {
   constructor(message: string, options?: ErrorOptions) {
     super("INVALID_INPUT", message, options);
+  }
+}
+
+export type ToolProtocolErrorCode =
+  | "TOOL_ACTION_UNKNOWN"
+  | "TOOL_ACTION_FIELDS"
+  | "PLAN_INVALID_SHAPE";
+
+export class ToolProtocolError extends ExpectedError<ToolProtocolErrorCode> {
+  constructor(
+    code: ToolProtocolErrorCode,
+    message: string,
+    readonly paths: readonly string[],
+    readonly skeleton?: unknown,
+  ) {
+    super(
+      code,
+      `[${code}] ${message} Paths: ${paths.join(", ")}.${
+        skeleton === undefined ? "" : ` Canonical skeleton: ${JSON.stringify(skeleton)}`
+      }`,
+    );
   }
 }
 
@@ -131,6 +193,17 @@ export class ModelSelectionError extends ExpectedError<"MODEL_UNAVAILABLE"> {
   }
 }
 
+export class SubscriptionPolicyError extends ExpectedError<
+  "SUBSCRIPTION_ROUTE_BLOCKED" | "SUBSCRIPTION_EXTRA_USAGE_ENABLED"
+> {
+  constructor(
+    code: "SUBSCRIPTION_ROUTE_BLOCKED" | "SUBSCRIPTION_EXTRA_USAGE_ENABLED",
+    message: string,
+  ) {
+    super(code, message);
+  }
+}
+
 export class AgentRunError extends ExpectedError<"AGENT_FAILED"> {
   constructor(message: string, options?: ErrorOptions) {
     super("AGENT_FAILED", message, options);
@@ -167,7 +240,8 @@ export type WorkflowErrorCode =
   | "WORKFLOW_STALE"
   | "WORKFLOW_REPAIR_LOCKED"
   | "WORKFLOW_NOT_FOUND"
-  | "WORKFLOW_CONFLICT";
+  | "WORKFLOW_CONFLICT"
+  | "WORKFLOW_TRANSITION_INVALID";
 
 export class WorkflowError extends ExpectedError<WorkflowErrorCode> {
   constructor(code: WorkflowErrorCode, message: string, options?: ErrorOptions) {

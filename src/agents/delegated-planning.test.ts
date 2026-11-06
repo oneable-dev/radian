@@ -101,6 +101,7 @@ async function fixture(chat = false) {
   const executors: SessionExecutor[] = [];
   const childModels: string[] = [];
   const childTasks: string[] = [];
+  const childLoadouts: string[][] = [];
   const profile = (id = "draft-a") =>
     writeFile(
       join(agentDir, "agents", "planner.md"),
@@ -113,7 +114,7 @@ async function fixture(chat = false) {
   ])
     await writeFile(
       join(agentDir, "agents", `${name}.md`),
-      `---\nname: ${name}\ndescription: Branch planning fixture\nmodel: planner-fixture/${model}\ntools: ['*']\n---\nPublish only a bounded plan reference.\n`,
+      `---\nname: ${name}\ndescription: Branch planning fixture\nmodel: planner-fixture/${model}\n---\nPublish only a bounded plan reference.\n`,
     );
   const settings = {
     retry: { enabled: false },
@@ -127,6 +128,13 @@ async function fixture(chat = false) {
     streamFn(model, context) {
       const last = context.messages.at(-1);
       if (model.provider === "planner-fixture") {
+        const active = new Set<string>();
+        for (const message of context.messages) {
+          if (message.role !== "system") continue;
+          for (const tool of message.toolsRemoved ?? []) active.delete(tool.name);
+          for (const tool of message.toolsAdded ?? []) active.add(tool.name);
+        }
+        childLoadouts.push([...active].sort());
         childModels.push(model.id);
         if (hierarchical) {
           if (last?.role === "toolResult")
@@ -254,7 +262,7 @@ async function fixture(chat = false) {
     },
     chat ? "chat" : "code",
   );
-  const parent = expectOk(await (chat ? registry.createChat() : registry.create(files.main)));
+  let parent = expectOk(await (chat ? registry.createChat() : registry.create(files.main)));
   const stored = () =>
     readTaskPlan(executors[0]!.sessionFile!, {
       cwd: contexts[0]!.cwd,
@@ -270,10 +278,10 @@ async function fixture(chat = false) {
     initialAction = action;
     const result = await registry.prompt(parent, input);
     if (!result.ok) throw result.error;
-    if (executors[0]!.state.status === "working") {
+    if (registry.details(parent)?.status === "working") {
       const done = Promise.withResolvers<void>();
-      const unsubscribe = executors[0]!.subscribe(() => {
-        if (executors[0]!.state.status !== "working") done.resolve();
+      const unsubscribe = registry.subscribe(() => {
+        if (registry.details(parent)?.status !== "working") done.resolve();
       });
       const timer = setTimeout(
         () => done.reject(new Error("Planning fixture did not settle.")),
@@ -292,11 +300,21 @@ async function fixture(chat = false) {
     ...files,
     options,
     registry,
-    parent,
+    get parent() {
+      return parent;
+    },
+    async reopen() {
+      const file = registry.sessionFile(parent)!;
+      expectOk(await registry.close(parent));
+      parent = expectOk(
+        await (chat ? registry.createChat(file) : registry.create(files.main, file)),
+      );
+    },
     contexts,
     executors,
     childModels,
     childTasks,
+    childLoadouts,
     parentRequests,
     childResults,
     hierarchy(tools: { name: string; arguments: unknown }[] = [], twice = false) {
@@ -530,6 +548,109 @@ const reportReadiness = { name: "radian-plan", arguments: { action: "report" } }
 const transcript = (executor: SessionExecutor) => Bun.file(executor.sessionFile!).text();
 const legacyNotice =
   "commandAgents.plan (planner) is a legacy single-planner binding and is not used by hierarchical /plan; run /plan --single to use it.";
+
+test("An ordinary turn spawns a plan-kind lead with only read-only and host protocol tools", async () => {
+  const app = await fixture();
+  app.hierarchy([declare(), spawn("tech"), wait]);
+  try {
+    // Task kind alone must protect the child when the root never invoked /plan.
+    expectOk(await app.run("Investigate the declared branch"));
+
+    expect(app.contexts[1]!.purpose).toBe("planning");
+    expect(app.contexts[1]!.binding?.purpose).toBe("planning");
+    expect(app.childLoadouts.length).toBeGreaterThan(0);
+    // Built-in leads retain host-owned delegation eligibility even with legacy role prose.
+    for (const tools of app.childLoadouts)
+      expect(tools).toEqual([
+        "find",
+        "grep",
+        "ls",
+        "radian-subagent",
+        "radian-supervisor",
+        "radian-task",
+        "read",
+      ]);
+    expect(app.childResults.some((result) => result.name === "radian-task" && !result.error)).toBe(
+      true,
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test.each(["ordinary turn", "reload", "reopen"])(
+  "An active hierarchical invocation retains read-only scope across %s",
+  async (lifecycle) => {
+    const app = await fixture();
+    app.hierarchy([declare()]);
+    const marker = join(app.main, "forbidden-followup.txt");
+    try {
+      expectOk(await app.run("/plan Investigate only"));
+      if (lifecycle === "reload") expectOk(await app.registry.reload(app.parent));
+      if (lifecycle === "reopen") await app.reopen();
+      const contextsBeforeFollowup = app.contexts.length;
+      app.hierarchy([
+        { name: "write", arguments: { path: marker, content: "unexpected" } },
+        {
+          name: "radian-subagent",
+          arguments: { action: "spawn", agent: "tech-lead", task: "Unbound escape" },
+        },
+        spawn("tech"),
+        wait,
+        reportReadiness,
+      ]);
+
+      // A plain user message neither ends the invocation nor admits unbound work.
+      expectOk(await app.run("Continue the declared investigation"));
+
+      expect(await Bun.file(marker).exists()).toBe(false);
+      expect(app.contexts).toHaveLength(contextsBeforeFollowup + 1);
+      expect(app.contexts.at(-1)!.purpose).toBe("planning");
+      const rootIndex = app.contexts.findLastIndex((context) => context.role === "main");
+      expect(await transcript(app.executors[rootIndex]!)).toContain(
+        "Hierarchical spawning requires",
+      );
+      const workflow = expectOk(
+        await openWorkflow(app.executors[rootIndex]!.sessionFile!, {
+          cwd: app.contexts[rootIndex]!.cwd,
+          conversationId: app.executors[rootIndex]!.savedSessionId,
+        }),
+      )!;
+      expect(workflow.doc.artifacts["tech-plan"]!.revisions).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test.each(["cancel", "single"])(
+  "Explicit %s ends an earlier hierarchical invocation durably without changing legacy scope",
+  async (ending) => {
+    const app = await fixture();
+    app.hierarchy([declare()]);
+    const marker = join(app.main, "ordinary-after-planning.txt");
+    try {
+      expectOk(await app.run("/plan Investigate only"));
+      await app.reopen();
+      if (ending === "cancel") {
+        app.hierarchy([{ name: "radian-plan", arguments: { action: "cancel" } }]);
+        expectOk(await app.run("Cancel the planning request"));
+      } else {
+        // Explicit legacy mode remains turn-scoped and supersedes the durable hierarchy.
+        expectOk(await app.run("/plan --single Legacy investigation"));
+      }
+      await app.reopen();
+      app.hierarchy([{ name: "write", arguments: { path: marker, content: "ordinary tool" } }]);
+
+      expectOk(await app.run("Perform ordinary user-authorized work"));
+
+      expect(await Bun.file(marker).text()).toBe("ordinary tool");
+      expect(app.contexts.every((context) => context.role === "main")).toBe(true);
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test("Q02 real host rejects a prior-run lead after its branch is re-declared", async () => {
   // Keep an actual SDK lead waiting while the root commits a new declaration.

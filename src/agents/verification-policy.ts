@@ -192,6 +192,14 @@ const activeAttempt = (defect: WorkflowDefect) =>
   defect.attempts.find(
     (attempt) => attempt.status === "authorized" || attempt.status === "submitted",
   );
+function unresolvedDefectsForTask(doc: WorkflowDocument, taskId: string): WorkflowDefect[] {
+  return Object.values(doc.defects).filter(
+    (defect) =>
+      defect.responsibleTasks.includes(taskId) &&
+      unresolved(defect) &&
+      !hasCurrentResolution(doc, defect, taskId),
+  );
+}
 function refreshTasks(
   doc: WorkflowDocument,
   responsibility: Pick<WorkflowDefect, "responsibleTasks">,
@@ -199,12 +207,7 @@ function refreshTasks(
   for (const id of responsibility.responsibleTasks) {
     const task = doc.tasks[id]!;
     if (task.status === "cancelled") continue;
-    const blockers = Object.values(doc.defects).filter(
-      (item) =>
-        item.responsibleTasks.includes(id) &&
-        unresolved(item) &&
-        !hasCurrentResolution(doc, item, id),
-    );
+    const blockers = unresolvedDefectsForTask(doc, id);
     if (blockers.some((item) => item.state === "analysis-pending"))
       task.status = "analysis-pending";
     else if (blockers.some((item) => item.state === "human-required"))
@@ -216,6 +219,18 @@ function refreshTasks(
         task.verification.revision === task.artifactRevision
           ? "verified"
           : "open";
+  }
+}
+/** Older policy versions could persist a current pass alongside an unresolved responsibility. */
+function reconcilePassedVerification(doc: WorkflowDocument, task: WorkflowTask): void {
+  if (
+    task.status !== "cancelled" &&
+    task.verification.state === "passed" &&
+    task.verification.revision === task.artifactRevision &&
+    unresolvedDefectsForTask(doc, task.id).length > 0
+  ) {
+    task.verification = { state: "failed", revision: task.artifactRevision };
+    refreshTasks(doc, { responsibleTasks: [task.id] });
   }
 }
 function finding(
@@ -443,7 +458,10 @@ function transition(
           return failure("WORKFLOW_CONFLICT", "No current implementation awaits QA.");
         if (command.verdict === "blocked") return ok({ kind: "applied" });
         target.verification = {
-          state: command.verdict === "pass" ? "passed" : "failed",
+          state:
+            command.verdict === "pass" && unresolvedDefectsForTask(doc, target.id).length === 0
+              ? "passed"
+              : "failed",
           revision: command.revision,
         };
         if (command.verdict === "fail") {
@@ -495,10 +513,6 @@ function transition(
       if (command.verdict === "blocked") return ok({ kind: "applied", ref: attempt.id });
       attempt.terminal = command.verdict;
       attempt.status = "closed";
-      target.verification = {
-        state: command.verdict === "pass" ? "passed" : "failed",
-        revision: command.revision,
-      };
       if (command.verdict === "pass") {
         defect.resolutions ??= {};
         defect.resolutions[target.id] = {
@@ -522,6 +536,14 @@ function transition(
           defect.analyses = {};
         } else defect.state = "open";
       }
+      // Record the receipt first; another unresolved responsibility still requires failed QA.
+      target.verification = {
+        state:
+          command.verdict === "pass" && unresolvedDefectsForTask(doc, target.id).length === 0
+            ? "passed"
+            : "failed",
+        revision: command.revision,
+      };
       refreshTasks(doc, defect);
       return ok({
         kind: "applied",
@@ -548,6 +570,7 @@ function transition(
           "WORKFLOW_REPAIR_LOCKED",
           "Three automated failures require human intervention.",
         );
+      reconcilePassedVerification(doc, task!);
       if (
         activeAttempt(defect) ||
         defect.attempts.some((item) => item.id === command.attemptId) ||
@@ -771,6 +794,8 @@ function transition(
       if (!source || doc.tasks[command.task.id])
         return failure("WORKFLOW_CONFLICT", "Source task missing or new task ID already exists.");
       const target = structuredClone(command.task);
+      // A linked task receives a fresh host schedule, never the source task's admission state.
+      delete target.schedule;
       target[command.type === "continue-task" ? "continues" : "splitFrom"] = source.id;
       target.artifactRevision = source.artifactRevision;
       target.verification = { state: "unverified" };
@@ -904,6 +929,32 @@ function transition(
       for (const defect of Object.values(doc.defects))
         for (const attempt of defect.attempts)
           if (!attempt.terminal && attempt.status === "authorized") attempt.status = "interrupted";
+      for (const target of Object.values(doc.tasks)) reconcilePassedVerification(doc, target);
+      if (doc.version === 2 && doc.scheduler) {
+        for (const invocation of doc.scheduler.invocations) {
+          if (
+            invocation.kind !== "execute" ||
+            invocation.state === "completed" ||
+            invocation.state === "cancelled"
+          )
+            continue;
+          invocation.state = "paused";
+          for (const admission of Object.values(doc.scheduler.admissions)) {
+            if (
+              admission.invocationId !== invocation.id ||
+              !["reserved", "launching", "running"].includes(admission.state)
+            )
+              continue;
+            admission.state = "interrupted";
+            doc.tasks[admission.taskId]!.schedule = {
+              state: "interrupted",
+              since: command.at,
+              invocationId: invocation.id,
+              reason: "restart-requires-explicit-resume",
+            };
+          }
+        }
+      }
       return ok({ kind: "applied" });
     }
   }

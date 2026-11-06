@@ -15,13 +15,18 @@ import { fixtureMessage, offlineRuntime } from "../testing/offline-runtime.ts";
 import { expectOk } from "../testing/results.ts";
 import { piSessionFactory } from "./pi-session-adapter.ts";
 import { planFilePath, readTaskPlan } from "./task-plan-store.ts";
-import { mutateWorkflow, workflowFilePath } from "./task-workflow-store.ts";
+import { migrateWorkflowToV2, mutateWorkflow, workflowFilePath } from "./task-workflow-store.ts";
 import { createWorkflowDocument, type WorkflowDocument } from "./task-workflow.ts";
 import { declareScope, declareSubtasks, publishPlanArtifact } from "./verification-policy.ts";
 import type { TaskPlan } from "./task-plan.ts";
-import { taskPlanningExtension, type PlanningHost } from "./task-planning.ts";
+import {
+  legacyPlanningInstructions,
+  taskPlanningExtension,
+  type PlanningHost,
+} from "./task-planning.ts";
 import { ok, err } from "../result.ts";
 import { CancelledError } from "../errors.ts";
+import type { PlanningSchedulerControl } from "./workflow-scheduler-driver.ts";
 
 function proposal(goal = "Deliver a reviewed feature"): TaskPlan {
   return {
@@ -1449,6 +1454,153 @@ test("The hosted parent exposes /plan while owned child agents do not become pla
     expect(childCommands.some((command) => command.value === "plan")).toBe(false);
   } finally {
     for (const executor of executors) expectOk(await executor.close());
+    await app.close();
+  }
+});
+
+test("Scheduler opt-in changes hierarchical planning to declare-and-observe without model spawning", async () => {
+  const controls: unknown[] = [];
+  const app = await fixture({
+    resolveAgent: async () => ok(null),
+    schedulerEnabled: () => ok(true),
+    controlScheduler: async (command) => {
+      controls.push(command);
+      return ok(undefined);
+    },
+    coordinate: async () => ok([]),
+  });
+  try {
+    app.withoutSubmission();
+    const session = await app.open();
+    app.setTool({
+      name: "radian-subagent",
+      arguments: { action: "spawn", agent: "lead", task: "Not model-owned" },
+    });
+    await app.run(session, "/plan Investigate scheduler mode");
+    expect(app.requests[0]).toContain("Read-only planning scheduler mode");
+    expect(app.requests[0]).toContain("do not spawn leads");
+    expect(app.delegations).toBe(0);
+    expect(controls).toEqual([expect.objectContaining({ kind: "started", baselineRevision: 0 })]);
+    expect(app.errors).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("A new plan snapshots the scheduler setting after command settings reload", async () => {
+  let schedulerEnabled = false;
+  const controls: PlanningSchedulerControl[] = [];
+  const app = await fixture({
+    resolveAgent: async () => ok(null),
+    configuredAgent: async () => {
+      schedulerEnabled = true;
+      return ok(null);
+    },
+    schedulerEnabled: () => ok(schedulerEnabled),
+    controlScheduler: async (command) => {
+      controls.push(command);
+      return ok(undefined);
+    },
+    coordinate: async () => ok([]),
+  });
+  try {
+    app.withoutSubmission();
+    const session = await app.open();
+
+    // Command configuration reload can change the setting before this invocation starts.
+    await app.run(session, "/plan Use the freshly loaded scheduler setting");
+    expect(controls).toEqual([expect.objectContaining({ kind: "started" })]);
+    expect(app.requests[0]).toContain("Read-only planning scheduler mode is enabled");
+    expect(app.errors).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test.each([false, true])(
+  "Older invocation metadata restores scheduler ownership %s from durable facts rather than the current setting",
+  async (schedulerOwned) => {
+    const controls: PlanningSchedulerControl[] = [];
+    const app = await fixture({
+      resolveAgent: async () => ok(null),
+      schedulerEnabled: () => ok(!schedulerOwned),
+      controlScheduler: async (command) => {
+        controls.push(command);
+        return ok(undefined);
+      },
+      coordinate: async () => ok([]),
+    });
+    try {
+      app.withoutSubmission();
+      const session = await app.open();
+      await app.run(session, "Initialize the durable session");
+      const doc = createWorkflowDocument(
+        { ...owner(session), sessionFile: session.sessionManager.getSessionFile()! },
+        crypto.randomUUID(),
+        0,
+      );
+      const restored = schedulerOwned ? migrateWorkflowToV2(doc) : doc;
+      if (restored.version === 2)
+        restored.scheduler = {
+          invocations: [{ id: "older-request", kind: "plan", state: "active", createdAt: 0 }],
+          admissions: {},
+          consents: {},
+        };
+      expectOk(
+        await mutateWorkflow(
+          { originSessionFile: session.sessionManager.getSessionFile()! },
+          owner(session),
+          () => ok({ doc: restored, effects: [], outcome: { kind: "applied" } }),
+          schedulerOwned ? { requireVersion: 2 } : undefined,
+        ),
+      );
+      // Entries written before ownership persistence must remain readable without migration.
+      session.sessionManager.appendCustomEntry("radian.task-plan-invocation", {
+        requestId: "older-request",
+        baselineRevision: 0,
+        state: "active",
+      });
+      const reopened = await app.open(session.sessionManager.getSessionFile()!);
+      await app.run(reopened, "Observe the restored invocation");
+      expect(app.requests.at(-1)!.includes("Read-only planning scheduler mode is enabled")).toBe(
+        schedulerOwned,
+      );
+
+      // Only the next request picks the opposite setting; the previous owner handles cleanup.
+      await app.run(reopened, "/plan Pick the current setting for a new request");
+      expect(controls).toEqual([
+        schedulerOwned
+          ? { kind: "cancelled", invocationId: "older-request" }
+          : expect.objectContaining({ kind: "started" }),
+      ]);
+      expect(app.errors).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Flag-off hierarchical planning keeps the complete deterministic request prompt unchanged", async () => {
+  const app = await fixture({
+    resolveAgent: async () => ok(null),
+    schedulerEnabled: () => ok(false),
+    coordinate: async () => ok([]),
+  });
+  try {
+    app.withoutSubmission();
+    const session = await app.open();
+    await app.run(session, "/plan Preserve legacy behavior");
+    const request = session.sessionManager
+      .getBranch()
+      .find(
+        (entry) =>
+          entry.type === "custom_message" && entry.customType === "radian.task-plan-request",
+      );
+    expect(request?.type === "custom_message" ? request.content : undefined).toBe(
+      `${legacyPlanningInstructions}\n\nHierarchical planning mode. Declare relevant branches with radian-task declare, spawn each assigned lead with binding {id: branchId, role: "lead"}, and ask leads to publish-plan. Never accept/save/rewrite their bodies. Use radian-plan report.\n\n\nUser requirements:\nPreserve legacy behavior`,
+    );
+    expect(app.errors).toEqual([]);
+  } finally {
     await app.close();
   }
 });

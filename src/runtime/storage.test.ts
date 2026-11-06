@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createWorkflowDocument } from "../agents/task-workflow.ts";
 import {
   mutateWorkflow,
+  workflowBackupFilePath,
   workflowFilePath,
   workflowLinkFilePath,
   writeWorkflowLink,
@@ -140,9 +141,124 @@ test("Legacy services report missing History support without automatic terminati
   await client.disconnect();
 });
 
-test.each([false, true])(
-  "Q17 repository purge treats live continuation retention=%s as preservation, not failure",
-  async (live) => {
+async function backupPurgeFixture(kind: "repository" | "worktrees") {
+  const root = await realpath(await mkdtemp("/tmp/radian-backup-purge-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  const repositoryId = join(cwd, ".git");
+  const paths = runtimePaths(repositoryId, true, join(root, "state"));
+  await privateDirectory(paths.directory);
+  const sdk = join(paths.directory, "sdk-sessions");
+  await privateDirectory(sdk);
+  const sessionFile = join(sdk, "origin.jsonl");
+  const owner = { conversationId: "origin", cwd };
+  await writeFile(sessionFile, JSON.stringify({ type: "session", id: "origin", cwd }) + "\n");
+  const doc = createWorkflowDocument({ ...owner, sessionFile }, crypto.randomUUID(), 0);
+  const location = { originSessionFile: sessionFile };
+  expectOk(
+    await mutateWorkflow(location, owner, () =>
+      ok({ doc, effects: [], outcome: { kind: "applied" } }),
+    ),
+  );
+  expectOk(
+    await mutateWorkflow(
+      location,
+      owner,
+      (doc) => ok({ doc: doc!, effects: [], outcome: { kind: "applied" } }),
+      { requireVersion: 2 },
+    ),
+  );
+  const purge = async () => {
+    expectOk(
+      await fenceRuntimeScope(paths, repositoryId, {
+        token: "backup-purge",
+        repositoryId,
+        kind,
+        worktrees: kind === "worktrees" ? [{ id: "tree", path: cwd }] : [],
+        sessionIds: [],
+        revision: 1,
+        state: "fenced",
+        updatedAt: 1,
+      }),
+    );
+    return expectOk(
+      await purgeRuntimeScope(paths, repositoryId, "backup-purge", { writersStopped: true }),
+    );
+  };
+  return { root, sessionFile, purge, close: () => rm(root, { recursive: true, force: true }) };
+}
+
+test.each(["repository", "worktrees"] as const)(
+  "%s purge removes a verified orphan backup even without an SDK file or origin document",
+  async (kind) => {
+    // The backup's v1 origin identifies scope; it must not be treated as unknown debris.
+    const app = await backupPurgeFixture(kind);
+    try {
+      const backup = workflowBackupFilePath(app.sessionFile);
+      await rm(app.sessionFile);
+      await rm(workflowFilePath(app.sessionFile));
+
+      const report = await app.purge();
+
+      expect(report.complete).toBe(true);
+      expect(report.residuals).toEqual([]);
+      expect(report.removed).toContain(backup);
+      expect(await Bun.file(backup).exists()).toBe(false);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test.each([
+  ["repository", "corrupt"],
+  ["repository", "foreign"],
+  ["repository", "symlink"],
+  ["worktrees", "corrupt"],
+  ["worktrees", "foreign"],
+  ["worktrees", "symlink"],
+] as const)(
+  "%s purge reports an unsafe %s backup instead of silently skipping it",
+  async (kind, unsafe) => {
+    // A private recovery artifact has the same cleanup safety requirements as its origin.
+    const app = await backupPurgeFixture(kind);
+    try {
+      const backup = workflowBackupFilePath(app.sessionFile);
+      const before = await readFile(backup, "utf8");
+      if (unsafe === "symlink") {
+        const target = join(app.root, "target.json");
+        await writeFile(target, before, { mode: 0o600 });
+        await rm(backup);
+        await symlink(target, backup);
+      } else if (unsafe === "corrupt") await writeFile(backup, "{broken");
+      else {
+        const doc = JSON.parse(before);
+        doc.origin.conversationId = "foreign";
+        await writeFile(backup, JSON.stringify(doc));
+      }
+
+      const report = await app.purge();
+
+      expect(report.complete).toBe(false);
+      expect(report.residuals.length).toBeGreaterThan(0);
+      expect(report.residuals.some((item) => item.code === "STORAGE_FAILED")).toBe(true);
+      expect(await Bun.file(app.sessionFile).exists()).toBe(true);
+      expect(await Bun.file(workflowFilePath(app.sessionFile)).exists()).toBe(true);
+      expect(await Bun.file(backup).exists()).toBe(true);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test.each([
+  ["repository", false],
+  ["repository", true],
+  ["worktrees", false],
+  ["worktrees", true],
+] as const)(
+  "Q17 %s purge treats migrated live continuation retention=%s as preservation, not failure",
+  async (kind, live) => {
     // A whole-repository purge must not reinterpret an intentionally retained workflow as unknown debris.
     const root = await realpath(await mkdtemp(join(tmpdir(), "radian-workflow-purge-")));
     try {
@@ -180,11 +296,20 @@ test.each([false, true])(
         expectOk(await writeWorkflowLink(nextFile, nextOwner, location, owner));
       }
       expectOk(
+        await mutateWorkflow(
+          location,
+          owner,
+          (doc) => ok({ doc: doc!, effects: [], outcome: { kind: "applied" } }),
+          { requireVersion: 2 },
+        ),
+      );
+      expect(await Bun.file(workflowBackupFilePath(sessionFile)).exists()).toBe(true);
+      expectOk(
         await fenceRuntimeScope(paths, repositoryId, {
           token: "workflow-purge",
           repositoryId,
-          kind: "repository",
-          worktrees: [],
+          kind,
+          worktrees: kind === "worktrees" ? [{ id: "tree", path: cwd }] : [],
           sessionIds: [],
           revision: 1,
           state: "fenced",
@@ -200,10 +325,14 @@ test.each([false, true])(
       expect(report.residuals).toEqual([]);
       expect(await Bun.file(sessionFile).exists()).toBe(false);
       expect(await Bun.file(workflowFilePath(sessionFile)).exists()).toBe(live);
+      expect(await Bun.file(workflowBackupFilePath(sessionFile)).exists()).toBe(live);
       if (live) {
         expect(report.preserved.some((item) => item.path === workflowFilePath(sessionFile))).toBe(
           true,
         );
+        expect(
+          report.preserved.some((item) => item.path === workflowBackupFilePath(sessionFile)),
+        ).toBe(true);
         expect(await Bun.file(workflowLinkFilePath(join(root, "next.jsonl"))).exists()).toBe(true);
       }
     } finally {

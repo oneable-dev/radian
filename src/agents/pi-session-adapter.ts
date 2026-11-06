@@ -24,6 +24,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { ExecutionState, SessionExecutor, SessionFactory } from "./session-registry.ts";
 import {
+  AgentConfigError,
   AgentRunError,
   CancelledError,
   CapabilityError,
@@ -44,7 +45,7 @@ import { runCompletionEntryType, type RunCompletion } from "./run-completion.ts"
 import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 import { FastMode } from "./fast-mode.ts";
-import { taskPlanningExtension } from "./task-planning.ts";
+import { publicationCorrection, taskPlanningExtension } from "./task-planning.ts";
 import { resolveCommandAgent } from "./command-agent.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
@@ -65,6 +66,13 @@ import { parseDashboardCommand } from "./dashboard-command.ts";
 import type { AccountManager, ModelRefresh } from "../accounts/manager.ts";
 import { parseAccountsCommand } from "../accounts/model.ts";
 import { bindAccountSession } from "../accounts/session.ts";
+import {
+  bindSubscriptionSession,
+  isSubscriptionRoute,
+  subscriptionModelRuntime,
+  SubscriptionPolicyScope,
+  validateSubscriptionRoute,
+} from "../providers/subscription-policy.ts";
 import { sessionResourceLoader } from "./resource-loader.ts";
 import { CHAT_SCOPE_ID } from "./session-scope.ts";
 import { ExtensionUiBridge, type ExtensionUiResponse } from "./extension-ui.ts";
@@ -72,6 +80,11 @@ import { McpAuthPicker } from "./mcp-auth-picker.ts";
 import { withComponentCommands } from "./extension-capabilities.ts";
 import {
   childToolPolicy,
+  childToolCeiling,
+  childToolDenials,
+  childToolEnforcement,
+  type ChildToolPolicy,
+  type ToolEnforcement,
   coordinatorTool,
   leafExcludedTools,
   legacyDelegationTools,
@@ -84,13 +97,17 @@ import {
   childSkills,
   delegates,
   discoverAgentProfiles,
+  findAgentProfile,
+  profileSkillSources,
   roleInstructions,
   type AgentProfile,
 } from "./agent-profiles.ts";
 import { subagentTool, supervisorTool, type SubagentCommand } from "./subagent-tools.ts";
 import { taskTool, type TaskCommand } from "./task-tool.ts";
 import { parseRepairCommand } from "./repair-command.ts";
+import { parseWorkflowCommand } from "./workflow-command.ts";
 import { subagentInstructions } from "./subagent-instructions.ts";
+import { workflowSchedulerEnabled, planningProfileSnapshot } from "./workflow-scheduler.ts";
 import {
   SubagentNotifications,
   subagentEventType,
@@ -98,6 +115,12 @@ import {
   subagentNotificationText,
   type SubagentNotice,
 } from "./subagent-notifications.ts";
+
+import {
+  builtInAgentsEnabled,
+  profileAdmission,
+  type EffectiveProfileSnapshot,
+} from "./effective-profile.ts";
 
 type QueuedUserMessage = Extract<
   ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number],
@@ -114,6 +137,8 @@ export type PiSessionOptions = {
   settings?: Partial<ReturnType<SettingsManager["getSettings"]>>;
   usageMonitor?: UsageMonitor;
   accounts?: AccountManager;
+  /** Production Radian hosts enforce this; isolated SDK/transport fixtures may leave it off. */
+  subscriptionsOnly?: boolean;
   chatDefaults?: () => { provider: string; model: string; effort?: string } | undefined;
   imageLoader?: (paths: readonly string[]) => Promise<Result<ImageContent[], ExpectedError>>;
 };
@@ -143,7 +168,11 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
             modelsPath: join(agentDir, "models.json"),
           });
 
-    const modelRuntime = workspace?.runtime ?? (await runtime);
+    const sourceRuntime = workspace?.runtime ?? (await runtime);
+    const subscriptionPolicy = new SubscriptionPolicyScope();
+    const modelRuntime = options.subscriptionsOnly
+      ? subscriptionModelRuntime(sourceRuntime, subscriptionPolicy)
+      : sourceRuntime;
     const chatDefaults = chat ? options.chatDefaults?.() : undefined;
     const settingsManager = options.streamFn
       ? SettingsManager.inMemory({
@@ -153,23 +182,63 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       : chat
         ? chatSettingsManager(agentDir)
         : SettingsManager.create(context.cwd, agentDir);
+    // Pi 1.2.0 reads the global-only warming mode outside applyOverrides(). Pin
+    // this session's getter, including across reloads, without persisting a user setting.
+    settingsManager.getCacheWarmingMode = () => "off";
     const fast = new FastMode();
     const compaction = new ManualCompaction();
     const mcpAuth = new McpAuthPicker();
-    const profiles = () =>
-      discoverAgentProfiles(agentDir, context.cwd, settingsManager.isProjectTrusted());
+    let resourcesReady = false;
+    const schedulerSetting = () =>
+      workflowSchedulerEnabled({ ...settingsManager.getSettings(), ...options.settings });
+    const schedulerOn = () => {
+      const setting = schedulerSetting();
+      return setting.ok && setting.value;
+    };
+    const profiles = (): Result<AgentProfile[], ExpectedError> => {
+      const enabled = builtInAgentsEnabled({
+        ...settingsManager.getSettings(),
+        ...options.settings,
+      });
+      if (!enabled.ok) return enabled;
+      const skills = resourcesReady
+        ? profileSkillSources(resourceLoader.getSkills().skills)
+        : undefined;
+      if (skills && !skills.ok) return skills;
+      return discoverAgentProfiles(agentDir, context.cwd, settingsManager.isProjectTrusted(), {
+        builtInAgents: enabled.value,
+        scope: chat ? "chat" : "code",
+        ...(skills?.ok ? { availableSkills: skills.value } : {}),
+        ...(resourcesReady
+          ? {
+              modelAvailable: (name: string) =>
+                !!modelRuntime.getModel(
+                  name.slice(0, name.indexOf("/")),
+                  name.slice(name.indexOf("/") + 1),
+                ),
+            }
+          : {}),
+      });
+    };
     // The host resolves and freezes a launch profile at spawn. Discover only when a host
     // integration supplied a name alone; later profile edits never change a running child.
     const discovered =
       context.role === "subagent" && context.agent && !context.profile ? profiles() : undefined;
     if (discovered && !discovered.ok) throw discovered.error;
     const profile =
-      context.role === "subagent" && context.profile?.name === context.agent
+      context.role === "subagent" &&
+      context.profile &&
+      findAgentProfile([context.profile], context.agent ?? "")
         ? context.profile
         : discovered?.ok
-          ? discovered.value.find((entry) => entry.name === context.agent)
+          ? findAgentProfile(discovered.value, context.agent ?? "")
           : undefined;
     let executor: PiSessionExecutor | undefined;
+    let compiledRoleInstructions: string | undefined;
+    if (profile) {
+      const admitted = profileAdmission(profile);
+      if (!admitted.ok) throw admitted.error;
+    }
     if (context.agent && !profile)
       throw new InputError(
         `Unknown agent: ${context.agent}. Use radian-subagent list to discover profiles.`,
@@ -180,6 +249,20 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       context.role === "subagent" &&
       delegates(profile) &&
       context.coordinateSubagents !== undefined;
+    const toolPolicy: ChildToolPolicy = {
+      profile,
+      purpose: context.purpose,
+      delegating,
+      bound: context.binding !== undefined,
+      boundRole: context.binding?.role,
+      ...(context.authorizeTool ? { authorize: (name) => context.authorizeTool!(name) } : {}),
+    };
+    const allowedTools = childToolCeiling(toolPolicy);
+    // An unrestricted built-in ceiling must not activate tools omitted by SDK defaults.
+    const selectedTools =
+      profile?.builtin && allowedTools?.includes("*") && !profile.tools ? undefined : allowedTools;
+    const denials = context.role === "subagent" ? childToolDenials(toolPolicy) : [];
+    const enforcement = context.role === "subagent" ? childToolEnforcement(toolPolicy) : undefined;
     const coordinates = context.role === "main" || delegating;
     let planningMode: "hierarchical" | "single" | null = null;
     const planningRuns = new Set<string>();
@@ -189,6 +272,27 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     ): Promise<Result<unknown, ExpectedError>> => {
       if (!context.coordinateSubagents)
         return err(new CapabilityError("This session cannot coordinate a planning agent."));
+      if (
+        context.planningSchedulerOwnership?.() &&
+        planningMode === "hierarchical" &&
+        command.action !== "list" &&
+        command.action !== "spawn"
+      ) {
+        const result = await context.coordinateSubagents(command, signal, "planning");
+        if (!result.ok) return result;
+        const summary = (value: unknown) => {
+          if (!value || typeof value !== "object") return value;
+          const {
+            output: _output,
+            recentOutput: _recent,
+            proposal: _proposal,
+            task: _task,
+            ...facts
+          } = value as Record<string, unknown>;
+          return facts;
+        };
+        return ok(Array.isArray(result.value) ? result.value.map(summary) : summary(result.value));
+      }
       if ((command.action === "status" || command.action === "wait") && !command.id) {
         while (true) {
           const statuses: unknown[] = [];
@@ -230,10 +334,19 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         if (!available.ok) return available;
         if (command.action === "list")
           return ok(available.value.map(({ prompt: _prompt, ...entry }) => entry));
-        target = available.value.find((entry) => entry.name === command.agent);
+        target = findAgentProfile(available.value, command.agent);
         if (!target) return err(new InputError(`Unknown planning agent ${command.agent}.`));
+        const admitted = profileAdmission(target);
+        if (!admitted.ok) return admitted;
       }
-      const result = await context.coordinateSubagents(command, signal, "planning", target);
+      const canonicalCommand =
+        command.action === "spawn" && target ? { ...command, agent: target.name } : command;
+      const result = await context.coordinateSubagents(
+        canonicalCommand,
+        signal,
+        "planning",
+        target,
+      );
       if (!result.ok) return result;
       if (
         command.action === "spawn" &&
@@ -270,31 +383,59 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         if (!available.ok) return available;
         if (command.action === "list")
           return ok(available.value.map(({ prompt: _prompt, ...entry }) => entry));
-        target = available.value.find((entry) => entry.name === command.agent);
+        target = findAgentProfile(available.value, command.agent);
         if (!target)
           return err(
             new InputError(
               `Unknown agent ${command.agent}. Available: ${available.value.map((entry) => entry.name).join(", ") || "none"}.`,
             ),
           );
+        const admitted = profileAdmission(target);
+        if (!admitted.ok) return admitted;
       }
       return (
-        context.coordinateSubagents?.(command, signal, undefined, target) ??
-        err(new CapabilityError("This session cannot coordinate subagents."))
+        context.coordinateSubagents?.(
+          command.action === "spawn" && target ? { ...command, agent: target.name } : command,
+          signal,
+          undefined,
+          target,
+        ) ?? err(new CapabilityError("This session cannot coordinate subagents."))
       );
     };
+    const publication =
+      context.role === "subagent" && context.binding?.role === "lead"
+        ? publicationCorrection()
+        : undefined;
     const taskTools =
       context.coordinateTask && (context.role === "main" || context.binding)
         ? [
-            taskTool(async (command: TaskCommand, callId, signal) => {
-              let knownProfiles: string[] = [];
-              if (["declare", "assign", "reassign", "continue", "split"].includes(command.action)) {
+            taskTool(
+              async (command: TaskCommand, callId, signal) => {
+                let knownProfiles: string[] = [];
+                if (
+                  ["declare", "assign", "reassign", "continue", "split"].includes(command.action)
+                ) {
+                  const available = profiles();
+                  if (!available.ok) return available;
+                  knownProfiles = available.value
+                    .filter((item) => profileAdmission(item).ok)
+                    .map((item) => item.name);
+                }
+                return context.coordinateTask!(command, callId, signal, knownProfiles);
+              },
+              publication,
+              () => {
                 const available = profiles();
-                if (!available.ok) return available;
-                knownProfiles = available.value.map((item) => item.name);
-              }
-              return context.coordinateTask!(command, callId, signal, knownProfiles);
-            }),
+                return available.ok
+                  ? ok([
+                      "main",
+                      ...available.value
+                        .filter((profile) => profileAdmission(profile).ok)
+                        .map((profile) => profile.name),
+                    ])
+                  : available;
+              },
+            ),
           ]
         : [];
     const reloadCommandSettings = async (): Promise<Result<void, ExpectedError>> => {
@@ -348,12 +489,13 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           ];
         return [
           ...instructions,
-          `Available agent profiles for radian-subagent (fresh context, shared worktree):\n${catalog.value.map(({ name, description }) => `- ${name}: ${description}`).join("\n") || "(none configured)"}`,
+          `Available agent profiles for radian-subagent (fresh context, shared worktree):\n${catalog.value.map(({ name, description, diagnostics }) => `- ${name}: ${description}${diagnostics?.length ? ` [blocked: ${diagnostics.map((item) => item.code).join(", ")}]` : ""}`).join("\n") || "(none configured)"}`,
         ];
       },
       extensionFactories: [
         fast.extension,
         compaction.extension,
+        ...(publication ? [publication.extension] : []),
         ...(context.role === "main"
           ? [
               taskPlanningExtension(
@@ -400,6 +542,15 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                         )
                       : available;
                   },
+                  schedulerEnabled: schedulerSetting,
+                  ...(context.planningSchedulerOwnership
+                    ? { schedulerOwnership: () => context.planningSchedulerOwnership!() }
+                    : {}),
+                  controlScheduler: (command) =>
+                    context.controlPlanningScheduler?.(command) ??
+                    Promise.resolve(
+                      err(new CapabilityError("Planning scheduler host is unavailable.")),
+                    ),
                   setPlanningMode: (mode) => {
                     planningMode = mode;
                   },
@@ -408,26 +559,13 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
               ),
             ]
           : []),
-        ...(context.role === "subagent"
-          ? [
-              childToolPolicy({
-                allowed: profile?.tools,
-                purpose: context.purpose,
-                delegating,
-                bound: context.binding !== undefined,
-                ...(context.authorizeTool
-                  ? { authorize: (name) => context.authorizeTool!(name) }
-                  : {}),
-              }),
-            ]
-          : []),
+        ...(context.role === "subagent" ? [childToolPolicy(toolPolicy)] : []),
         ...(profile
           ? [
               (pi: ExtensionAPI) => {
                 pi.on("before_agent_start", (event) => {
-                  const instructions = roleInstructions(profile, resourceLoader.getSkills().skills);
-                  if (!instructions.ok) throw instructions.error;
-                  event.systemPromptOptions.appendSystemPrompt += `\n\n${instructions.value}`;
+                  if (compiledRoleInstructions)
+                    event.systemPromptOptions.appendSystemPrompt += `\n\n${compiledRoleInstructions}`;
                 });
               },
             ]
@@ -497,18 +635,20 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       ...(profile?.thinking ? { thinkingLevel: profile.thinking } : {}),
       // SDK 1.2 retains unmatched MCP tools for codemode unless an mcp__ selector exists.
       // The bare namespace prefix is not an MCP tool; it opts into strict matching.
-      // leafPolicy remains authoritative for every direct and nested tool call.
+      // childToolPolicy remains authoritative for every direct and nested tool call.
       // Delegation metadata grants the host coordinator even when tools is empty.
-      ...(profile?.tools || context.purpose
+      ...(selectedTools || context.purpose
         ? {
             tools: [
               ...(context.purpose
-                ? [...planningTools].filter(matcher(profile?.tools))
-                : (profile?.tools ?? [])),
+                ? [...planningTools].filter(matcher(allowedTools))
+                : (selectedTools ?? [])),
               supervisorToolName,
               ...(context.binding ? ["radian-task"] : []),
               ...(delegating ? [coordinatorTool] : []),
               "mcp__",
+              // Only denial stubs are added here; prepareLoadout hides their declarations.
+              ...denials.map((tool) => tool.name),
             ],
           }
         : {}),
@@ -516,6 +656,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         ? { customTools: [subagentTool(coordinate), ...taskTools] }
         : {
             customTools: [
+              ...denials,
               ...taskTools,
               supervisorTool(
                 context.contactSupervisor
@@ -531,13 +672,15 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     let adopted = false;
     const releaseTransport =
       options.accounts && !options.streamFn
-        ? bindAccountSession(options.accounts, worktreeId, session)
+        ? bindAccountSession(options.accounts, worktreeId, session, options.subscriptionsOnly)
         : () => {};
+    let releaseSubscription = () => {};
     const accountChanged = (provider: string) => executor?.credentialsChanged(provider);
 
     workspace?.listeners.add(accountChanged);
 
     const releaseAccounts = () => {
+      releaseSubscription();
       workspace?.listeners.delete(accountChanged);
       releaseTransport();
     };
@@ -550,6 +693,8 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         if (options.streamFn) {
           session.agent.streamFunction = options.streamFn;
         }
+        if (options.subscriptionsOnly)
+          releaseSubscription = bindSubscriptionSession(session, subscriptionPolicy);
 
         const diagnostics = new CommandDiagnostics();
         const unsupportedSessionAction = async (): Promise<never> => {
@@ -599,9 +744,14 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
               profile.model.slice(profile.model.indexOf("/") + 1),
             );
             if (!roleModel)
-              throw new ModelSelectionError(
+              throw new AgentConfigError(
+                "AGENT_MODEL_UNAVAILABLE",
                 `Agent ${profile.name} requires unavailable model ${profile.model}.`,
               );
+            if (options.subscriptionsOnly) {
+              const allowed = validateSubscriptionRoute(roleModel);
+              if (!allowed.ok) throw allowed.error;
+            }
             if (session.model?.provider !== roleModel.provider || session.model.id !== roleModel.id)
               await session.setModel(roleModel, { persist: false });
           }
@@ -614,6 +764,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           }
           const instructions = roleInstructions(profile, resourceLoader.getSkills().skills);
           if (!instructions.ok) throw instructions.error;
+          compiledRoleInstructions = instructions.value;
           if (profile.tools && !context.purpose) {
             const registered = new Set(session.getAllTools().map((tool) => tool.name));
             const missing = profile.tools.filter(
@@ -624,6 +775,24 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                 `Agent ${profile.name} requires unavailable tools: ${missing.join(", ")}.`,
               );
           }
+        }
+        resourcesReady = true;
+        let effectiveProfile: EffectiveProfileSnapshot | undefined;
+        if (profile?.effectiveProfile) {
+          const skillSources = profileSkillSources(resourceLoader.getSkills().skills);
+          if (!skillSources.ok) throw skillSources.error;
+          effectiveProfile = Object.freeze({
+            ...profile.effectiveProfile,
+            ...(session.model ? { model: `${session.model.provider}/${session.model.id}` } : {}),
+            thinking: session.thinkingLevel,
+            purpose: context.purpose ?? "execution",
+            skills: Object.freeze(
+              profile.skills.map((name) =>
+                Object.freeze({ name, ...skillSources.value.find((skill) => skill.name === name) }),
+              ),
+            ),
+          });
+          session.sessionManager.appendCustomEntry("radian.effective-profile", effectiveProfile);
         }
         executor = new PiSessionExecutor(
           session,
@@ -649,7 +818,38 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           ui,
           mcpAuth,
           context.role === "subagent",
+          options.subscriptionsOnly,
+          subscriptionPolicy,
+          effectiveProfile,
+          enforcement,
         );
+        Object.defineProperty(executor, "workflowScheduler", {
+          get: () =>
+            context.role === "main" && schedulerOn()
+              ? {
+                  profiles: () => {
+                    const available = profiles();
+                    if (!available.ok) return available;
+                    return ok(
+                      available.value
+                        .filter((item) => !item.diagnostics?.length)
+                        .map((item) => ({
+                          ...item,
+                          effectiveProfile: {
+                            ...planningProfileSnapshot(item),
+                            ...(item.model
+                              ? {}
+                              : session.model
+                                ? { model: `${session.model.provider}/${session.model.id}` }
+                                : {}),
+                            thinking: item.thinking ?? session.thinkingLevel,
+                          },
+                        })),
+                    );
+                  },
+                }
+              : undefined,
+        });
         executor.setUiActive(context.isUiActive?.() ?? false);
         adopted = true;
 
@@ -760,6 +960,10 @@ export class PiSessionExecutor implements SessionExecutor {
     private readonly ui?: ExtensionUiBridge,
     private readonly mcpAuth?: McpAuthPicker,
     private readonly ownedChild = false,
+    private readonly subscriptionsOnly = false,
+    private readonly subscriptionPolicy = new SubscriptionPolicyScope(),
+    readonly effectiveProfile?: EffectiveProfileSnapshot,
+    readonly enforcement?: ToolEnforcement,
   ) {
     this.status = this.finalStatus(false);
     // Packages may register aliases during session_start, after resource discovery.
@@ -951,26 +1155,33 @@ export class PiSessionExecutor implements SessionExecutor {
         ? { provider: model.provider, id: model.id }
         : null;
     const effort = this.modelSelectionSnapshot?.effort ?? this.session.thinkingLevel;
+    const warnings: string[] = [];
+    if (unavailable.size)
+      warnings.push(
+        `Could not refresh models for ${[...unavailable].join(", ")}. Those providers were omitted from the list. Check /accounts and refresh /model to retry. Running conversations were not changed.`,
+      );
+    if (this.subscriptionsOnly && model) {
+      const allowed = validateSubscriptionRoute(model);
+      if (!allowed.ok) warnings.push(allowed.error.message);
+    }
 
     return ok({
       conversationId: this.savedSessionId,
       current,
       effort,
-      ...(unavailable.size
-        ? {
-            warning: `Could not refresh models for ${[...unavailable].join(", ")}. Those providers were omitted from the list. Check /accounts and refresh /model to retry. Running conversations were not changed.`,
-          }
-        : {}),
-      models: loaded.value.map((model) => ({
-        provider: model.provider,
-        id: model.id,
-        name: model.name,
-        contextWindow: model.contextWindow,
-        reasoning: model.reasoning,
-        images: model.input.includes("image"),
-        efforts: getSupportedThinkingLevels(model),
-        effort: clampThinkingLevel(model, effort),
-      })),
+      ...(warnings.length ? { warning: warnings.join("\n") } : {}),
+      models: loaded.value
+        .filter((model) => !this.subscriptionsOnly || isSubscriptionRoute(model))
+        .map((model) => ({
+          provider: model.provider,
+          id: model.id,
+          name: model.name,
+          contextWindow: model.contextWindow,
+          reasoning: model.reasoning,
+          images: model.input.includes("image"),
+          efforts: getSupportedThinkingLevels(model),
+          effort: clampThinkingLevel(model, effort),
+        })),
     });
   }
 
@@ -992,6 +1203,13 @@ export class PiSessionExecutor implements SessionExecutor {
       );
     }
 
+    if (this.subscriptionsOnly) {
+      const selected = this.session.modelRuntime.getModel(identity.provider, identity.id);
+      if (selected) {
+        const allowed = validateSubscriptionRoute(selected);
+        if (!allowed.ok) return Promise.resolve(allowed);
+      }
+    }
     const current = this.session.model;
     this.modelSelectionSnapshot = {
       current: current ? { provider: current.provider, id: current.id } : null,
@@ -1018,6 +1236,11 @@ export class PiSessionExecutor implements SessionExecutor {
             "This model is no longer available with the current provider credentials. Refresh the list and choose another model.",
           ),
         );
+      }
+      if (this.subscriptionsOnly) {
+        // Discovery may refresh a provider after the initial synchronous selection check.
+        const allowed = validateSubscriptionRoute(model);
+        if (!allowed.ok) return allowed;
       }
       if (effort !== undefined && !getSupportedThinkingLevels(model).includes(effort)) {
         return err(
@@ -1439,6 +1662,12 @@ export class PiSessionExecutor implements SessionExecutor {
       );
     }
 
+    const workflow = parseWorkflowCommand(text);
+    if (!workflow.ok) return Promise.resolve(workflow);
+    if (workflow.value)
+      return Promise.resolve(
+        err(new CapabilityError("Use the host /workflow command. No model prompt was sent.")),
+      );
     const repair = parseRepairCommand(text);
     if (!repair.ok) return Promise.resolve(repair);
     if (repair.value)
@@ -1604,92 +1833,95 @@ export class PiSessionExecutor implements SessionExecutor {
         const stopDialog = command ? this.ui?.onDialog(accept) : undefined;
         // Admission, commands and handled input are not model runs. Only SDK work
         // events may publish working, including work started by an extension.
-        const result = await withCleanup(
-          async (): Promise<Result<void, ExpectedError>> => {
-            if (bareMcpAuth) {
-              if (!registered || !this.ui || !this.mcpAuth) {
-                return err(
-                  new CapabilityError(
-                    "MCP authentication requires a configured MCP adapter and an interactive main session.",
-                  ),
-                );
-              }
-
-              // Refresh through the adapter's own command: a deferred runtime can publish an
-              // empty shutdown snapshot before its real catalog is initialized.
-              const status = this.session.extensionRunner
-                .getRegisteredCommands()
-                .find(
-                  (candidate) =>
-                    candidate.name === "mcp-adapter" &&
-                    candidate.sourceInfo.path === registered.sourceInfo.path,
-                );
-              if (status) {
-                if (command) {
-                  this.diagnostics.end(command);
+        const policyRun = await this.subscriptionPolicy.capture(() =>
+          withCleanup(
+            async (): Promise<Result<void, ExpectedError>> => {
+              if (bareMcpAuth) {
+                if (!registered || !this.ui || !this.mcpAuth) {
+                  return err(
+                    new CapabilityError(
+                      "MCP authentication requires a configured MCP adapter and an interactive main session.",
+                    ),
+                  );
                 }
 
-                command = this.diagnostics.begin(status.invocationName);
-
-                const initialized = await capture(() =>
-                  this.session.prompt(`/${status.invocationName} status`, {
-                    streamingBehavior: "steer",
-                  }),
-                );
-                if (!initialized.ok || command.failure) {
-                  return initialized;
-                }
-
-                this.diagnostics.end(command);
-                command = this.diagnostics.begin(name);
-              }
-
-              const selected = await this.mcpAuth.select(this.ui.context);
-              if (!selected.ok) {
-                return selected;
-              }
-              if (
-                selected.value === undefined ||
-                revisionAtSubmission !== this.inputRevision ||
-                this.closing ||
-                this.disposed
-              ) {
-                handled = true;
-                admitted.resolve();
-                accept();
-
-                return ok(undefined);
-              }
-
-              text = `/mcp-auth ${selected.value}`;
-            }
-
-            return capture(() =>
-              this.session.prompt(text, {
-                streamingBehavior: "steer",
-                ...(replayImages ? { expandPromptTemplates: false } : {}),
-                ...(images.length ? { images: [...images] } : {}),
-                preflightResult: (disposition) => {
-                  handled = disposition === "handled";
-                  if (display && disposition === "started") {
-                    this.startingCommandDisplay = display;
-                  } else if (display && disposition === "queued") {
-                    const queued = this.queuedMessages().at(-1);
-                    if (queued) this.queuedCommandDisplays.set(queued, display);
+                // Refresh through the adapter's own command: a deferred runtime can publish an
+                // empty shutdown snapshot before its real catalog is initialized.
+                const status = this.session.extensionRunner
+                  .getRegisteredCommands()
+                  .find(
+                    (candidate) =>
+                      candidate.name === "mcp-adapter" &&
+                      candidate.sourceInfo.path === registered.sourceInfo.path,
+                  );
+                if (status) {
+                  if (command) {
+                    this.diagnostics.end(command);
                   }
+
+                  command = this.diagnostics.begin(status.invocationName);
+
+                  const initialized = await capture(() =>
+                    this.session.prompt(`/${status.invocationName} status`, {
+                      streamingBehavior: "steer",
+                    }),
+                  );
+                  if (!initialized.ok || command.failure) {
+                    return initialized;
+                  }
+
+                  this.diagnostics.end(command);
+                  command = this.diagnostics.begin(name);
+                }
+
+                const selected = await this.mcpAuth.select(this.ui.context);
+                if (!selected.ok) {
+                  return selected;
+                }
+                if (
+                  selected.value === undefined ||
+                  revisionAtSubmission !== this.inputRevision ||
+                  this.closing ||
+                  this.disposed
+                ) {
+                  handled = true;
                   admitted.resolve();
                   accept();
-                },
-              }),
-            );
-          },
-          async () => {
-            stopDialog?.();
-            if (command) {
-              this.diagnostics.end(command);
-            }
-          },
+
+                  return ok(undefined);
+                }
+
+                text = `/mcp-auth ${selected.value}`;
+              }
+
+              return capture(() =>
+                this.session.prompt(text, {
+                  streamingBehavior: "steer",
+                  ...(replayImages ? { expandPromptTemplates: false } : {}),
+                  ...(images.length ? { images: [...images] } : {}),
+                  preflightResult: (disposition) => {
+                    handled = disposition === "handled";
+                    if (display && disposition === "started") {
+                      this.startingCommandDisplay = display;
+                    } else if (display && disposition === "queued") {
+                      const queued = this.queuedMessages().at(-1);
+                      if (queued) this.queuedCommandDisplays.set(queued, display);
+                    }
+                    admitted.resolve();
+                    accept();
+                  },
+                }),
+              );
+            },
+            async () => {
+              stopDialog?.();
+              if (command) {
+                this.diagnostics.end(command);
+              }
+            },
+          ),
         );
+        const result = policyRun.value;
         if (command?.failure) {
           this.ui?.cancelDialogs();
 
@@ -1731,7 +1963,7 @@ export class PiSessionExecutor implements SessionExecutor {
           return err(new CancelledError());
         }
         if (this.state.status === "failure") {
-          return err(new AgentRunError(this.error ?? "Agent failed."));
+          return err(policyRun.error ?? new AgentRunError(this.error ?? "Agent failed."));
         }
 
         return ok(undefined);

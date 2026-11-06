@@ -1,20 +1,42 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, type Skill } from "@earendil-works/pi-coding-agent";
-import { ResourceError, systemCode } from "../errors.ts";
+import {
+  AgentConfigError,
+  ResourceError,
+  systemCode,
+  type AgentConfigDiagnostic,
+} from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { ModelEffort } from "./model-selection.ts";
+import { builtinAgents, getBuiltinAgent, type BuiltinAgentDescriptor } from "./builtin-agents.ts";
+import {
+  profileAdmission,
+  profileHash,
+  resolveEffectiveProfile,
+  type AgentOverlay,
+  type EffectiveProfileSnapshot,
+  type EffectiveProfileSources,
+} from "./effective-profile.ts";
 
 export type AgentProfile = {
   readonly name: string;
   readonly description: string;
+  readonly source?: "builtin" | "personal" | "project" | "run";
+  /** Immutable host identity; overlays cannot replace descriptor authority. */
+  readonly builtin?: BuiltinAgentDescriptor;
+  readonly effectiveProfile?: EffectiveProfileSnapshot;
+  readonly toolCeiling?: readonly string[];
+  readonly verificationTools?: readonly string[];
+  readonly diagnostics?: readonly AgentConfigDiagnostic[];
   readonly model?: string;
   readonly thinking?: ModelEffort;
   readonly skills: readonly string[];
   readonly tools?: readonly string[];
   /**
-   * Host-owned delegation opt-in. Omitted and explicit false both mean a leaf. The
-   * profile's tools restrict its own calls only; targets keep their own capabilities.
+   * Built-in overlays may narrow descriptor delegation; custom profiles opt in here.
+   * For custom profiles, omitted and explicit false both mean a leaf. The profile's
+   * tools restrict its own calls only; targets keep their own capabilities.
    */
   readonly delegation?: { readonly enabled: boolean };
   readonly prompt: string;
@@ -32,7 +54,12 @@ const fields = new Set([
 ]);
 const efforts = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-function readDefinition(path: string): Result<ReturnType<typeof parseFrontmatter>, ResourceError> {
+function readDefinition(
+  path: string,
+): Result<
+  ReturnType<typeof parseFrontmatter> & { hash: string },
+  ResourceError | AgentConfigError
+> {
   let content: string;
   try {
     content = readFileSync(path, "utf8");
@@ -41,17 +68,54 @@ function readDefinition(path: string): Result<ReturnType<typeof parseFrontmatter
     return err(new ResourceError(`Cannot read definition: ${path}`, { cause }));
   }
   try {
-    return ok(parseFrontmatter(content));
+    return ok({ ...parseFrontmatter(content), hash: profileHash(content) });
   } catch (cause) {
     if (!(cause instanceof Error) || cause.name !== "YAMLParseError") throw cause;
-    return err(new ResourceError(`Invalid YAML frontmatter: ${path}`, { cause }));
+    return err(
+      new AgentConfigError("AGENT_OVERLAY_FIELD", `Invalid YAML frontmatter: ${path}`, path),
+    );
   }
 }
 
-export function readAgentProfile(path: string): Result<AgentProfile, ResourceError> {
+function definitionIdentity(path: string, declaredName: unknown) {
+  const stem = basename(path, ".md");
+  const declared = declaredName === undefined ? stem : declaredName;
+  const fileRole = getBuiltinAgent(stem)?.descriptor.id;
+  const declaredRole =
+    typeof declared === "string" ? getBuiltinAgent(declared)?.descriptor.id : undefined;
+  const roles = [...new Set([fileRole, declaredRole].filter((id) => id !== undefined))];
+  const collision: AgentConfigDiagnostic | undefined =
+    roles.length > 0 && fileRole !== declaredRole
+      ? {
+          code: "AGENT_NAME_COLLISION",
+          message: `${path}: filename and declared name must identify the same built-in agent.`,
+          path,
+        }
+      : undefined;
+  return {
+    name: declaredRole ?? fileRole ?? (typeof declared === "string" ? declared : stem),
+    roles,
+    collision,
+  };
+}
+
+export function readAgentProfile(
+  path: string,
+  builtInAgents = true,
+): Result<AgentProfile, ResourceError | AgentConfigError> {
   const parsed = readDefinition(path);
   if (!parsed.ok) return parsed;
-  const { frontmatter: data, body } = parsed.value;
+  const { frontmatter: data, body, hash } = parsed.value;
+  if (builtInAgents) {
+    const identity = definitionIdentity(path, data?.name);
+    if (identity.collision)
+      return err(new AgentConfigError(identity.collision.code, identity.collision.message, path));
+    if (getBuiltinAgent(identity.name))
+      return resolveEffectiveProfile(identity.name, {
+        overlays: [{ path, hash, source: "personal", fields: data, body }],
+        projectTrusted: false,
+      });
+  }
   const invalid = (message: string) => err(new ResourceError(`${path}: ${message}`));
   if (!data || typeof data !== "object" || Array.isArray(data))
     return invalid("Expected a mapping.");
@@ -90,6 +154,14 @@ export function readAgentProfile(path: string): Result<AgentProfile, ResourceErr
     data.tools.some((name: string) => !/^[a-zA-Z0-9_*][a-zA-Z0-9_.*-]*$/u.test(name))
   )
     return invalid("tools accepts names or '*' patterns, not default-selection modifiers.");
+  if (builtInAgents && name === "main")
+    return err(
+      new AgentConfigError(
+        "AGENT_NAME_COLLISION",
+        `${path}: main is the root session, not an agent profile.`,
+        path,
+      ),
+    );
   const delegation: unknown = data.delegation;
   if (delegation !== undefined) {
     if (!delegation || typeof delegation !== "object" || Array.isArray(delegation))
@@ -118,13 +190,27 @@ export function readAgentProfile(path: string): Result<AgentProfile, ResourceErr
   });
 }
 
+export function findAgentProfile(
+  profiles: readonly AgentProfile[],
+  name: string,
+): AgentProfile | undefined {
+  return profiles.find(
+    (profile) => profile.name === name || profile.builtin?.aliases.includes(name),
+  );
+}
+
 export function discoverAgentProfiles(
   agentDir: string,
   cwd: string,
   projectTrusted: boolean,
+  options: Omit<EffectiveProfileSources, "overlays" | "projectTrusted"> & {
+    builtInAgents?: boolean;
+  } = {},
 ): Result<AgentProfile[], ResourceError> {
-  const directories = [join(agentDir, "agents")];
-  if (projectTrusted) {
+  const directories: { path: string; source: "personal" | "project" }[] = [
+    { path: join(agentDir, "agents"), source: "personal" },
+  ];
+  if (projectTrusted && options.scope !== "chat") {
     const ancestors: string[] = [];
     let directory = cwd;
     for (;;) {
@@ -133,10 +219,16 @@ export function discoverAgentProfiles(
       if (parent === directory) break;
       directory = parent;
     }
-    directories.push(...ancestors);
+    directories.push(...ancestors.map((path) => ({ path, source: "project" as const })));
   }
   const profiles = new Map<string, AgentProfile>();
-  for (const directory of directories) {
+  const overlays = new Map<string, AgentOverlay[]>();
+  const diagnostics = new Map<string, AgentConfigDiagnostic[]>();
+  const enabled = options.builtInAgents !== false;
+  const diagnose = (name: string, diagnostic: AgentConfigDiagnostic) => {
+    diagnostics.set(name, [...(diagnostics.get(name) ?? []), diagnostic]);
+  };
+  for (const { path: directory, source } of directories) {
     let entries: string[];
     try {
       entries = readdirSync(directory)
@@ -150,18 +242,121 @@ export function discoverAgentProfiles(
     }
     const names = new Set<string>();
     for (const entry of entries) {
-      const parsed = readAgentProfile(join(directory, entry));
-      if (!parsed.ok) return parsed;
-      if (names.has(parsed.value.name))
-        return err(new ResourceError(`Duplicate agent ${parsed.value.name} at ${directory}.`));
-      names.add(parsed.value.name);
-      profiles.set(parsed.value.name, parsed.value);
+      const path = join(directory, entry);
+      if (!enabled) {
+        const parsed = readAgentProfile(path, false);
+        if (!parsed.ok)
+          return err(new ResourceError(parsed.error.message, { cause: parsed.error }));
+        if (names.has(parsed.value.name))
+          return err(new ResourceError(`Duplicate agent ${parsed.value.name} at ${directory}.`));
+        names.add(parsed.value.name);
+        profiles.set(parsed.value.name, parsed.value);
+        continue;
+      }
+      const definition = readDefinition(path);
+      if (!definition.ok) {
+        if (definition.error instanceof ResourceError) return err(definition.error);
+        // A broken alias file still belongs to its canonical role and reserves that identity.
+        const { name } = definitionIdentity(path, undefined);
+        if (getBuiltinAgent(name)) {
+          if (names.has(name))
+            diagnose(name, {
+              code: "AGENT_NAME_COLLISION",
+              message: `Duplicate agent ${name} at ${directory}.`,
+              path,
+            });
+          names.add(name);
+        }
+        diagnose(name, {
+          code: "AGENT_OVERLAY_FIELD",
+          message: definition.error.message,
+          path,
+        });
+        continue;
+      }
+      const { frontmatter: data, body, hash } = definition.value;
+      const { name, roles, collision } = definitionIdentity(path, data?.name);
+      if (collision) {
+        // Neither spelling may redirect an overlay into a different built-in role.
+        for (const role of roles) {
+          diagnose(role, collision);
+          names.add(role);
+        }
+        continue;
+      }
+      if (names.has(name)) {
+        diagnose(name, {
+          code: "AGENT_NAME_COLLISION",
+          message: `Duplicate agent ${name} at ${directory}.`,
+          path,
+        });
+        continue;
+      }
+      names.add(name);
+      if (name === "main") {
+        diagnose(name, {
+          code: "AGENT_NAME_COLLISION",
+          message: `${path}: main is the root session, not an agent profile.`,
+          path,
+        });
+        continue;
+      }
+      if (getBuiltinAgent(name)) {
+        overlays.set(name, [
+          ...(overlays.get(name) ?? []),
+          { path, hash, source, fields: data, body },
+        ]);
+        continue;
+      }
+      const parsed = readAgentProfile(path);
+      if (!parsed.ok) {
+        if (parsed.error.cause && systemCode(parsed.error.cause))
+          return err(new ResourceError(parsed.error.message, { cause: parsed.error }));
+        diagnose(name, { code: "AGENT_OVERLAY_FIELD", message: parsed.error.message, path });
+        continue;
+      }
+      profiles.set(name, { ...parsed.value, source });
     }
+  }
+  if (!enabled) return ok([...profiles.values()]);
+  for (const { descriptor } of builtinAgents) {
+    const result = resolveEffectiveProfile(descriptor.id, {
+      ...options,
+      overlays: overlays.get(descriptor.id) ?? [],
+      projectTrusted,
+    });
+    if (!result.ok)
+      diagnose(descriptor.id, {
+        code: result.error.code,
+        message: result.error.message,
+        ...(result.error.path ? { path: result.error.path } : {}),
+      });
+    const fallback = result.ok
+      ? result
+      : resolveEffectiveProfile(descriptor.id, { overlays: [], projectTrusted: false });
+    if (!fallback.ok) throw fallback.error;
+    profiles.set(descriptor.id, fallback.value);
+  }
+  for (const [name, issues] of diagnostics) {
+    const profile = profiles.get(name) ?? {
+      name,
+      description: "Unavailable agent configuration",
+      skills: [],
+      prompt: "",
+      path: issues[0]?.path ?? name,
+    };
+    profiles.set(
+      name,
+      Object.freeze({
+        ...profile,
+        diagnostics: Object.freeze(issues.map((issue) => Object.freeze(issue))),
+      }),
+    );
   }
   return ok([...profiles.values()]);
 }
 
-export function childSkills(skills: Skill[]): Result<Skill[], ResourceError> {
+export function childSkills(skills: Skill[]): Result<Skill[], ResourceError | AgentConfigError> {
   const visible: Skill[] = [];
   for (const skill of skills) {
     const parsed = readDefinition(skill.filePath);
@@ -182,10 +377,29 @@ export function childSkills(skills: Skill[]): Result<Skill[], ResourceError> {
   return ok(visible);
 }
 
+export function profileSkillSources(
+  skills: Skill[],
+): Result<
+  readonly { name: string; path: string; hash: string }[],
+  ResourceError | AgentConfigError
+> {
+  const visible = childSkills(skills);
+  if (!visible.ok) return visible;
+  const sources: { name: string; path: string; hash: string }[] = [];
+  for (const skill of visible.value) {
+    const parsed = readDefinition(skill.filePath);
+    if (!parsed.ok) return parsed;
+    sources.push({ name: skill.name, path: skill.filePath, hash: parsed.value.hash });
+  }
+  return ok(sources);
+}
+
 export function roleInstructions(
   profile: AgentProfile,
   skills: readonly Skill[],
-): Result<string, ResourceError> {
+): Result<string, ResourceError | AgentConfigError> {
+  const admitted = profileAdmission(profile);
+  if (!admitted.ok) return admitted;
   const parts = [
     `<agent_role name=${JSON.stringify(profile.name)}>\n${profile.prompt}\n</agent_role>`,
   ];
@@ -193,7 +407,8 @@ export function roleInstructions(
     const skill = skills.find((candidate) => candidate.name === name);
     if (!skill)
       return err(
-        new ResourceError(
+        new AgentConfigError(
+          "AGENT_SKILL_MISSING",
           `Agent ${profile.name} requires unavailable or parent-only skill ${name}.`,
         ),
       );
@@ -207,5 +422,10 @@ export function roleInstructions(
 }
 
 export function delegates(profile: AgentProfile | undefined): boolean {
-  return profile?.delegation?.enabled === true;
+  if (!profile) return false;
+  return (
+    profileAdmission(profile).ok &&
+    profile.delegation?.enabled === true &&
+    (!profile.builtin || profile.builtin.delegation.enabled)
+  );
 }

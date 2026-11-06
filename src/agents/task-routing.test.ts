@@ -172,6 +172,56 @@ test.each(["lead", "worker"] as const)(
   },
 );
 
+test.each(["lead", "worker"] as const)(
+  "Plan-kind %s bindings derive planning purpose even when omitted or overridden",
+  (role) => {
+    // The durable task kind is authoritative, not a model-supplied purpose.
+    const doc = routingDocument();
+    doc.tasks["task-main"]!.kind = "plan";
+    for (const purpose of [undefined, "analysis", "planning"] as const) {
+      const binding = expectOk(
+        resolveTaskBinding(
+          doc,
+          { id: "task-main", role, ...(purpose ? { purpose } : {}) },
+          role === "lead" ? "lead" : "worker",
+          { kind: "root" },
+        ),
+      );
+
+      expect(binding.purpose).toBe("planning");
+      expect(Object.isFrozen(binding)).toBe(true);
+    }
+    expect(
+      expectError(
+        resolveTaskBinding(doc, { id: "task-main", role: "implementer" }, "engineer", {
+          kind: "root",
+        }),
+      ).code,
+    ).toBe("WORKFLOW_NOT_AUTHORIZED");
+  },
+);
+
+test("A bound planning lead cannot drop its purpose when binding a worker to another task", () => {
+  const doc = routingDocument();
+  const spawner = {
+    kind: "bound" as const,
+    binding: { ...bindingFor(doc, "lead"), purpose: "planning" as const },
+    profile: "lead",
+  };
+
+  for (const purpose of [undefined, "analysis"] as const) {
+    const binding = expectOk(
+      resolveTaskBinding(
+        doc,
+        { id: "task-child", role: "worker", ...(purpose ? { purpose } : {}) },
+        "worker",
+        spawner,
+      ),
+    );
+    expect(binding.purpose).toBe("planning");
+  }
+});
+
 function routingRecipients(doc: WorkflowDocument, liveLead = true) {
   const rootNotices: SubagentNotice[] = [];
   const leadNotices: SubagentNotice[] = [];
@@ -533,6 +583,85 @@ async function fixture() {
     },
   };
 }
+
+test("Ordinary host coordination freezes plan purpose through descendants and restart without relaunch", async () => {
+  const app = await fixture();
+  try {
+    await app.change((doc) => {
+      doc.tasks["task-main"]!.kind = "plan";
+    });
+
+    // No /plan turn or caller-selected purpose is needed for a durable plan-kind binding.
+    expectOk(await app.spawn("lead", "read-only lead", { id: "task-main", role: "lead" }));
+    const lead = app.executors.at(-1)!;
+    await lead.started.promise;
+    expect(lead.context.purpose).toBe("planning");
+    expect(lead.context.binding?.purpose).toBe("planning");
+    expectOk(await app.spawn("worker", "inherited worker", undefined, lead.context));
+    const worker = app.executors.at(-1)!;
+    await worker.started.promise;
+    expect(worker.context.purpose).toBe("planning");
+    expect(
+      expectError(
+        await app.spawn("engineer", "forbidden implementation", {
+          id: "task-main",
+          role: "implementer",
+        }),
+      ).code,
+    ).toBe("WORKFLOW_NOT_AUTHORIZED");
+    const record = app.registry.records[0]!;
+    expect(record.ownedSubagents!.map((child) => child.purpose)).toEqual(["planning", "planning"]);
+    expect(record.ownedSubagents!.every((child) => child.status === "working")).toBe(true);
+    expectOk(await app.registry.close(app.id));
+    const restartedContexts: SessionContext[] = [];
+    const restarted = new SessionRegistry(demoWorkspace(), async (context) => {
+      restartedContexts.push(context);
+      return new Executor(context, app.conversationId, app.sessionFile);
+    });
+    try {
+      // A fresh registry reconstructs observations only; no child executor is recreated.
+      expectOk(await restarted.restore({ ...record, lifecycle: "open", closedAt: null }));
+      expect(restartedContexts).toHaveLength(1);
+      expect(restartedContexts[0]!.role).toBe("main");
+      const restored = restarted.records[0]!.ownedSubagents!;
+      expect(restored.map((child) => child.purpose)).toEqual(["planning", "planning"]);
+      expect(restored.map((child) => child.status)).toEqual([null, null]);
+      expect(restored.every((child) => child.finishedAt !== undefined)).toBe(true);
+      expect(restarted.details(app.id)?.result?.outcome).toBe("unfinished");
+      expect(restarted.details(app.id)?.error).toContain("Previous runtime ended");
+    } finally {
+      expectOk(await restarted.shutdown());
+    }
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Host plan-kind purpose overrides an explicit analysis launch request", async () => {
+  const app = await fixture();
+  try {
+    await app.change((doc) => {
+      doc.tasks["task-main"]!.kind = "plan";
+    });
+    expectOk(
+      await app.root.context.coordinateSubagents!(
+        {
+          action: "spawn",
+          agent: "lead",
+          task: "planning wins",
+          binding: { id: "task-main", role: "lead", purpose: "analysis" },
+        },
+        undefined,
+        "analysis",
+        profile("lead"),
+      ),
+    );
+    expect(app.executors.at(-1)!.context.purpose).toBe("planning");
+    expect(app.executors.at(-1)!.context.binding?.purpose).toBe("planning");
+  } finally {
+    await app.cleanup();
+  }
+});
 
 test("Q04 Admission commits before capacity and reuses the same authorized attempt", async () => {
   // A failed task competes with five unrelated live runs for the same root capacity.

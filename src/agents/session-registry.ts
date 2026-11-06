@@ -1,4 +1,12 @@
 import { realpath } from "node:fs/promises";
+import {
+  parseWorkflowCommand,
+  workflowCommand,
+  workflowSummary,
+  type WorkflowCommand,
+} from "./workflow-command.ts";
+import { previewExecution, validateExecutionConsent, renderConsent } from "./workflow-consent.ts";
+import { executionProfileSnapshot, scheduleExecution } from "./workflow-execution-scheduler.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { Repository, Worktree } from "../workspace/model.ts";
@@ -22,11 +30,14 @@ import {
   type ExpectedError,
 } from "../errors.ts";
 import type { AgentProfile } from "./agent-profiles.ts";
+import type { ToolEnforcement } from "./leaf-extension.ts";
+import { profileAdmission, type EffectiveProfileSnapshot } from "./effective-profile.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { TranscriptSection } from "./transcript.ts";
 import type { SessionTelemetry } from "./telemetry.ts";
 import {
   filterCatalog,
+  filterCompletions,
   type CompletionCatalog,
   type CompletionItem,
   type CompletionQuery,
@@ -109,11 +120,25 @@ import {
   type TaskRecipient,
 } from "./task-routing.ts";
 
+import {
+  PlanningSchedulerDriver,
+  type PlanningSchedulerControl,
+} from "./workflow-scheduler-driver.ts";
+import {
+  activeAdmission,
+  capturePlanInputs,
+  schedule,
+  type FrozenPlanInputs,
+  type SchedulerAdmission,
+  type SchedulerIntent,
+} from "./workflow-scheduler.ts";
+
 export type ExecutionState = {
   readonly conversationId?: string;
   readonly resourceRevision?: number;
   readonly status: AgentStatus | null;
   readonly activity?: "compacting";
+  readonly workflow?: string;
   readonly output: string;
   readonly finalOutput?: string;
   readonly activeTools?: readonly string[];
@@ -132,6 +157,9 @@ export type ExecutionState = {
 };
 
 export type SessionExecutor = {
+  readonly workflowScheduler?: { profiles(): Result<AgentProfile[], ExpectedError> } | undefined;
+  readonly enforcement?: ToolEnforcement | undefined;
+  readonly effectiveProfile?: EffectiveProfileSnapshot | undefined;
   readonly savedSessionId: string;
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
@@ -186,6 +214,12 @@ export type SessionContext = {
   readonly profile?: AgentProfile;
   readonly purpose?: "planning" | "analysis";
   readonly binding?: WorkflowBinding;
+  controlPlanningScheduler?(
+    command: PlanningSchedulerControl,
+  ): Promise<Result<void, ExpectedError>>;
+  planningSchedulerOwnership?():
+    | { invocationId: string; state: "active" | "cancelling" | "cleanup-uncertain" }
+    | undefined;
   /** Revalidate durable write authority for each mutating SDK tool call. */
   authorizeTool?(toolName: string): Promise<Result<void, ExpectedError>>;
   coordinateTask?(
@@ -214,6 +248,7 @@ export type SessionContext = {
 };
 
 export type SessionRecord = {
+  readonly effectiveProfile?: EffectiveProfileSnapshot;
   readonly id: string;
   readonly name: string;
   readonly scope?: SessionScope;
@@ -255,32 +290,6 @@ export const delegationLimits = {
 
 type RepairTarget = { readonly defectId: string; readonly attemptId: string };
 
-type FrozenPlanInputs = {
-  boundRevision: number;
-  dependencies: { artifactId: string; revision: number }[];
-  missing: string[];
-};
-
-function capturePlanInputs(doc: WorkflowDocument, taskId: string): FrozenPlanInputs {
-  const dependencies: FrozenPlanInputs["dependencies"] = [];
-  const missing: string[] = [];
-  for (const id of doc.tasks[taskId]!.dependsOn) {
-    const artifactId = doc.tasks[id]?.planArtifact;
-    const latest = artifactId ? doc.artifacts[artifactId]?.revisions.at(-1) : undefined;
-    if (
-      artifactId &&
-      latest?.docRevision !== undefined &&
-      doc.manifest?.declaredRevision !== undefined &&
-      latest.docRevision > doc.manifest.declaredRevision
-    ) {
-      dependencies.push({ artifactId, revision: latest.revision });
-    } else {
-      missing.push(id);
-    }
-  }
-  return { boundRevision: doc.revision, dependencies, missing };
-}
-
 function renderFrozenPlanInputs(
   doc: WorkflowDocument,
   taskId: string,
@@ -301,6 +310,9 @@ function renderFrozenPlanInputs(
 }
 
 type Execution = {
+  readonly operationId?: string;
+  readonly enforcement?: ToolEnforcement;
+  readonly effectiveProfile?: EffectiveProfileSnapshot;
   readonly id: string;
   readonly name: string;
   readonly role: "main" | "subagent";
@@ -352,6 +364,22 @@ type Execution = {
 };
 
 type OpenExecution = Execution & {
+  executionOwnership?: {
+    invocationId: string;
+    consentId: string;
+    driver: PlanningSchedulerDriver;
+    cancelling?: boolean;
+    profiles(): Result<AgentProfile[], ExpectedError>;
+  };
+
+  schedulerOwnership?: {
+    invocationId: string;
+    state: "active" | "cancelling" | "cleanup-uncertain";
+    driver: PlanningSchedulerDriver;
+    initialize(): Promise<Result<void, ExpectedError>>;
+  };
+  schedulerControl?: Promise<unknown>;
+  workflowSummary?: string;
   closeTask?: Promise<Result<void, ExpectedError>>;
   readonly scope: SessionScope;
   readonly worktree?: Worktree | undefined;
@@ -366,6 +394,12 @@ type OpenExecution = Execution & {
   childrenSettledAt?: number;
   childrenTimer?: ReturnType<typeof setTimeout>;
 };
+
+function entrySummary(root: OpenExecution, doc: WorkflowDocument): void {
+  const summary = workflowSummary(doc);
+  if (summary) root.workflowSummary = summary;
+  else delete root.workflowSummary;
+}
 
 export class SessionRegistry {
   private readonly entries = new Map<string, OpenExecution>();
@@ -705,6 +739,7 @@ export class SessionRegistry {
                 Date.now() >= entry.childrenSettledAt + 10_000
                   ? []
                   : this.visibleChildren(entry),
+              ...(state?.workflow ? { workflow: state.workflow } : {}),
               ...(state?.request ? { request: state.request } : {}),
               ...(state?.result ? { result: state.result } : {}),
               ...(entry.attention ? { attention: entry.attention } : {}),
@@ -724,6 +759,7 @@ export class SessionRegistry {
           name: entry.name,
           status: state?.status ?? null,
           subagents: this.children(entry),
+          ...(state?.workflow ? { workflow: state.workflow } : {}),
           ...(state?.request ? { request: state.request } : {}),
           ...(state?.result ? { result: state.result } : {}),
           ...(entry.attention ? { attention: entry.attention } : {}),
@@ -764,7 +800,8 @@ export class SessionRegistry {
     }
 
     // Replacement guards input admission; it must not invent model activity for /clear.
-    return entry.attention ? { ...state, attention: entry.attention } : state;
+    const detailed = entry.workflowSummary ? { ...state, workflow: entry.workflowSummary } : state;
+    return entry.attention ? { ...detailed, attention: entry.attention } : detailed;
   }
 
   acknowledge(id: string, conversationId: string, resultId: string): Result<void, ExpectedError> {
@@ -1000,6 +1037,12 @@ export class SessionRegistry {
         ...(child.task !== undefined ? { task: child.task } : {}),
         ...(child.binding ? { binding: child.binding } : {}),
         ...(child.purpose ? { purpose: child.purpose } : {}),
+        ...((child.executor?.enforcement ?? child.enforcement)
+          ? { enforcement: child.executor?.enforcement ?? child.enforcement }
+          : {}),
+        ...((child.executor?.effectiveProfile ?? child.effectiveProfile)
+          ? { effectiveProfile: child.executor?.effectiveProfile ?? child.effectiveProfile }
+          : {}),
         output: state?.output ?? child.output ?? "",
         ...(finalOutput !== undefined ? { finalOutput } : {}),
         ...(child.failure ? { error: child.failure } : {}),
@@ -1044,6 +1087,9 @@ export class SessionRegistry {
     const record: SessionRecord = {
       id: entry.id,
       name: entry.name,
+      ...((executor.effectiveProfile ?? entry.effectiveProfile)
+        ? { effectiveProfile: executor.effectiveProfile ?? entry.effectiveProfile }
+        : {}),
       ...(scope.kind === "code" ? { worktreeId: scope.worktreeId } : { scope }),
       ...(scope.kind === "chat" && entry.role === "subagent" ? { role: "subagent" as const } : {}),
       cwd: worktree?.path ?? homedir(),
@@ -1254,6 +1300,8 @@ export class SessionRegistry {
               progress: saved.progress,
               ...(saved.binding ? { binding: Object.freeze({ ...saved.binding }) } : {}),
               ...(saved.purpose ? { purpose: saved.purpose } : {}),
+              ...(saved.effectiveProfile ? { effectiveProfile: saved.effectiveProfile } : {}),
+              ...(saved.enforcement ? { enforcement: saved.enforcement } : {}),
               ...(saved.task !== undefined ? { task: saved.task } : {}),
               ...(saved.sessionFile ? { fileKey: saved.sessionFile } : {}),
               ...(saved.error ? { failure: saved.error } : {}),
@@ -1379,18 +1427,8 @@ export class SessionRegistry {
     const generation = crypto.randomUUID();
     const ready = capture(() =>
       this.factory({
-        cwd: worktree?.path ?? homedir(),
-        scope,
-        ...(scope.kind === "code" ? { worktreeId: scope.worktreeId } : {}),
-        role: "main",
-        isUiActive: () => this.uiActive,
+        ...this.rootFactoryOptions(id, generation, scope, worktree?.path ?? homedir()),
         ...(requestedFile ? { sessionFile: requestedFile } : {}),
-        spawnSubagent: (name, task, signal) =>
-          this.spawnSubagent(id, name, task, signal, generation),
-        coordinateSubagents: (command, signal, purpose, target) =>
-          this.coordinateSubagents(id, generation, command, signal, purpose, target),
-        coordinateTask: (command, callId, signal, profiles) =>
-          this.coordinateTask(id, generation, undefined, command, callId, signal, profiles),
       }),
     );
     const entry: OpenExecution = {
@@ -1513,6 +1551,24 @@ export class SessionRegistry {
     } else {
       entry.phase = "open";
     }
+    const schedulerOwnedElsewhere =
+      workflow.value &&
+      [...this.entries.values()].some(
+        (other) =>
+          other !== entry &&
+          other.schedulerOwnership &&
+          workflow.value!.doc.members.some(
+            (member) => member.conversationId === other.executor?.savedSessionId,
+          ),
+      );
+    if (
+      entry.executor?.workflowScheduler &&
+      workflow.value?.doc.version === 2 &&
+      !schedulerOwnedElsewhere
+    ) {
+      const interrupted = await this.interruptOrphanedPlanningSchedulers(entry, workflow.value.doc);
+      if (!interrupted.ok) return interrupted;
+    }
     this.emit();
 
     return ok(entry.id);
@@ -1590,10 +1646,311 @@ export class SessionRegistry {
     );
     if (result.ok) {
       committed?.(result.value.doc);
+      entrySummary(root, result.value.doc);
       const routed = this.routeTaskWorkflow(root, result.value.doc);
       if (!routed.ok) return routed;
     }
     return result;
+  }
+
+  /** Internal host controls; user-command provenance is enforced by the command boundary. */
+  async controlPlanningScheduler(
+    sessionId: string,
+    command: PlanningSchedulerControl,
+  ): Promise<Result<void, ExpectedError>> {
+    const selected = this.requireOpen(sessionId);
+    if (!selected.ok) return selected;
+    const root = selected.value;
+    // Serialize controls through shutdown, including starts that precede the first declaration.
+    const pending = (root.schedulerControl ?? Promise.resolve(ok(undefined))).then(() =>
+      this.applyPlanningSchedulerControl(root, command),
+    );
+    root.schedulerControl = pending;
+    try {
+      return await pending;
+    } finally {
+      if (root.schedulerControl === pending) delete root.schedulerControl;
+    }
+  }
+
+  private async applyPlanningSchedulerControl(
+    root: OpenExecution,
+    command: PlanningSchedulerControl,
+  ): Promise<Result<void, ExpectedError>> {
+    if (!this.ownerCurrent(root, root, root.generation)) return err(new CancelledError());
+    const ownership = root.schedulerOwnership;
+    if (command.kind !== "started" && ownership?.invocationId !== command.invocationId) {
+      // Never redirect a control to another live owner. Without one, a known durable
+      // invocation may be reconciled before cancellation, just as after a restart.
+      if (ownership || !["restarted", "cancelled", "resumed"].includes(command.kind))
+        return ok(undefined);
+    }
+    if (command.kind === "started" && root.executionOwnership)
+      return err(
+        new WorkflowError(
+          "WORKFLOW_CONFLICT",
+          "Cancel execution before starting a planning scheduler.",
+        ),
+      );
+    if (command.kind === "started" && ownership)
+      return ownership.invocationId === command.invocationId
+        ? ok(undefined)
+        : err(
+            new WorkflowError(
+              "WORKFLOW_CONFLICT",
+              "This conversation already owns a planning scheduler; cancel it before starting another plan.",
+            ),
+          );
+    const configuration = root.executor?.workflowScheduler;
+    if (!ownership && !configuration) return ok(undefined);
+    const opened = await this.openTaskWorkflow(root);
+    if (!opened.ok) return opened;
+    if (command.kind === "started") {
+      if (
+        opened.value &&
+        this.workflowMembers(root, opened.value.doc).some(
+          (other) => other !== root && (other.schedulerOwnership || other.executionOwnership),
+        )
+      )
+        return err(
+          new WorkflowError(
+            "WORKFLOW_CONFLICT",
+            "Another open conversation owns this workflow scheduler; cancel or close it before starting a new plan.",
+          ),
+        );
+      // Reopen may have happened while OFF. Reconcile v2 orphans now, before a new
+      // invocation can see their active admission keys; never migrate merely to recover.
+      if (opened.value) {
+        const recovered = await this.interruptOrphanedPlanningSchedulers(root, opened.value.doc);
+        if (!recovered.ok) return recovered;
+      }
+      const driver = this.planningScheduler(root, configuration!, command.invocationId);
+      let initialization: Promise<Result<void, ExpectedError>> | undefined;
+      const initialize = () => {
+        initialization ??= driver.control(command).then((result) => {
+          if (!result.ok) initialization = undefined;
+          return result;
+        });
+        return initialization;
+      };
+      if (opened.value) {
+        const started = await initialize();
+        if (!started.ok) {
+          await driver.shutdown();
+          return started;
+        }
+      }
+      root.schedulerOwnership = {
+        invocationId: command.invocationId,
+        state: "active",
+        driver,
+        initialize,
+      };
+      return ok(undefined);
+    }
+    if (!ownership) {
+      // Unknown/historical controls are no-ops, and a sibling's live owner is authoritative.
+      const doc = opened.value?.doc;
+      if (
+        doc?.version !== 2 ||
+        this.workflowMembers(root, doc).some((member) => member.schedulerOwnership)
+      )
+        return ok(undefined);
+      const invocation = doc.scheduler?.invocations.find(
+        (item) => item.id === command.invocationId && item.kind === "plan",
+      );
+      if (!invocation) return ok(undefined);
+      if (command.kind === "resumed") {
+        if (invocation.state !== "paused" || !configuration)
+          return err(
+            new WorkflowError(
+              "WORKFLOW_CONFLICT",
+              "Only paused planning invocations can be resumed with the scheduler enabled.",
+            ),
+          );
+        if (this.workflowMembers(root, doc).some((member) => member.executionOwnership))
+          return err(
+            new WorkflowError("WORKFLOW_CONFLICT", "Execution currently owns this workflow."),
+          );
+        const recovered = await this.interruptOrphanedPlanningSchedulers(root, doc, invocation.id);
+        if (!recovered.ok) return recovered;
+        const driver = this.planningScheduler(root, configuration, invocation.id);
+        root.schedulerOwnership = {
+          invocationId: invocation.id,
+          state: "active",
+          driver,
+          initialize: async () => ok(undefined),
+        };
+        const resumed = await driver.control(command);
+        if (!resumed.ok) {
+          await driver.shutdown();
+          delete root.schedulerOwnership;
+        }
+        return resumed;
+      }
+      if (
+        ["cancelled", "completed"].includes(invocation.state) &&
+        !Object.values(doc.scheduler!.admissions).some(
+          (item) => item.invocationId === invocation.id && activeAdmission(item.state),
+        )
+      )
+        return ok(undefined);
+      const recovered = await this.interruptOrphanedPlanningSchedulers(
+        root,
+        doc,
+        command.invocationId,
+      );
+      if (!recovered.ok || command.kind === "restarted") return recovered;
+      const recovery = this.planningScheduler(
+        root,
+        { profiles: () => ok([]) },
+        command.invocationId,
+      );
+      const cancelled = await recovery.control(command);
+      await recovery.shutdown();
+      return cancelled;
+    }
+    if (command.kind !== "cancelled") return ownership.driver.control(command);
+    ownership.state = "cancelling";
+    // A declaration can commit before lazy initialization fails. Establish the owner's
+    // durable invocation without profiles or new launches before reconciling its cancel.
+    const initialized = opened.value ? await ownership.initialize() : ok(undefined);
+    const controlled =
+      initialized.ok && opened.value ? await ownership.driver.control(command) : initialized;
+    if (!controlled.ok) {
+      ownership.state = "cleanup-uncertain";
+      return controlled;
+    }
+    // Only confirmed cleanup of this invocation, followed by driver shutdown, releases guards.
+    await ownership.driver.shutdown();
+    delete root.schedulerOwnership;
+    return ok(undefined);
+  }
+
+  private async interruptOrphanedPlanningSchedulers(
+    root: OpenExecution,
+    doc: WorkflowDocument,
+    invocationId?: string,
+  ): Promise<Result<void, ExpectedError>> {
+    if (doc.version !== 2) return ok(undefined);
+    for (const invocation of doc.scheduler?.invocations ?? []) {
+      if (
+        invocation.kind !== "plan" ||
+        (invocationId && invocation.id !== invocationId) ||
+        (invocation.state !== "active" &&
+          !Object.values(doc.scheduler!.admissions).some(
+            (item) => item.invocationId === invocation.id && activeAdmission(item.state),
+          ))
+      )
+        continue;
+      // Recovery must not require current profiles, launch work or replay an old plan.
+      const recovery = this.planningScheduler(root, { profiles: () => ok([]) }, invocation.id);
+      const recovered = await recovery.control({ kind: "restarted", invocationId: invocation.id });
+      await recovery.shutdown();
+      if (!recovered.ok) return recovered;
+    }
+    return ok(undefined);
+  }
+
+  private planningScheduler(
+    root: OpenExecution,
+    configuration: NonNullable<SessionExecutor["workflowScheduler"]>,
+    invocationId: string,
+  ): PlanningSchedulerDriver {
+    const report = (error: ExpectedError) => {
+      if (error.code !== "CANCELLED")
+        console.warn(`[radian:scheduler] ${error.code}: ${error.message}`);
+    };
+    const cancelling = () =>
+      root.schedulerOwnership?.invocationId === invocationId &&
+      root.schedulerOwnership.state !== "active";
+    return new PlanningSchedulerDriver({
+      // The provider is captured at start: later setting changes cannot revoke this owner.
+      profiles: () => (cancelling() ? ok([]) : configuration.profiles()),
+      runs: () =>
+        [...this.descendants(root)].map((run) => ({
+          id: run.id,
+          ...(run.operationId ? { operationId: run.operationId } : {}),
+          active: this.active(run),
+        })),
+      commit: async (event, runs) => {
+        if (!this.ownerCurrent(root, root, root.generation) || event.invocationId !== invocationId)
+          return err(new CancelledError());
+        const opened = await this.openTaskWorkflow(root);
+        if (!opened.ok) return opened;
+        if (!opened.value)
+          return err(new WorkflowError("WORKFLOW_NOT_FOUND", "No declared planning workflow."));
+        let intents: SchedulerIntent[] = [];
+        const committed = await mutateWorkflow(
+          opened.value.location,
+          opened.value.doc.origin,
+          (doc) => {
+            if (!doc) return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared."));
+            const reduced = schedule(doc, runs, {
+              ...event,
+              capacity: delegationLimits.activeDescendants,
+              retainedCapacity: delegationLimits.retainedRuns,
+            });
+            if (!reduced.ok) return reduced;
+            intents = reduced.value.intents;
+            return ok({ doc: reduced.value.doc, effects: [], outcome: { kind: "applied" } });
+          },
+          { requireVersion: 2 },
+        );
+        if (committed.ok) entrySummary(root, committed.value.doc);
+        return committed.ok ? ok({ doc: committed.value.doc, intents }) : committed;
+      },
+      launch: async (operationId, admission, profile) => {
+        const existing = [...this.descendants(root)].find((run) => run.operationId === operationId);
+        if (existing) return ok(existing.id);
+        const opened = await this.openTaskWorkflow(root);
+        if (!opened.ok) return opened;
+        const task = opened.value?.doc.tasks[admission.taskId];
+        if (!task || admission.role !== "lead" || admission.effectiveProfile.purpose !== "planning")
+          return err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Only read-only plan leads may be scheduled.",
+            ),
+          );
+        return this.spawnChild(
+          root,
+          root,
+          root.generation,
+          profile.name,
+          [
+            "Read-only planning scheduler mode. Investigate only; do not edit files, run tests/builds, install or implement. Publish a complete reviewed plan with radian-task publish-plan; return only its ref and bounded summary. Ask your owner for material decisions. Descendants must remain planning-only.",
+            `Goal: ${opened.value!.doc.manifest!.goal}`,
+            `Branch: ${task.id}: ${task.title}\nScope: ${task.scope}`,
+            `Frozen prerequisites: ${admission.frozenInputs.join(", ") || "none"}. Retrieve only exact ref@revision bodies through radian-task status.`,
+          ].join("\n\n"),
+          {
+            background: true,
+            purpose: "planning",
+            profile: {
+              ...profile,
+              ...(admission.effectiveProfile.model
+                ? { model: admission.effectiveProfile.model }
+                : {}),
+              ...(admission.effectiveProfile.thinking
+                ? { thinking: admission.effectiveProfile.thinking }
+                : {}),
+              effectiveProfile: admission.effectiveProfile,
+            },
+            requestedBinding: { id: task.id, role: "lead" },
+            schedulerAdmission: { operationId, admission },
+          },
+        );
+      },
+      stop: async (operationId) => {
+        const run = [...this.descendants(root)].find((item) => item.operationId === operationId);
+        return run ? this.closeExecution(run) : ok(undefined);
+      },
+      report,
+      unexpected: (error) => {
+        reportUnexpected(error, "planning scheduler");
+      },
+    });
   }
 
   private async admitTaskRepair(
@@ -1698,6 +2055,52 @@ export class SessionRegistry {
     return undefined;
   }
 
+  private checkExecutionConsent(
+    root: OpenExecution,
+    doc: WorkflowDocument,
+    invocationId: string,
+  ): Result<void, WorkflowError> {
+    const owner = root.executionOwnership;
+    const invocation =
+      doc.version === 2
+        ? doc.scheduler?.invocations.find((item) => item.id === invocationId)
+        : undefined;
+    const receipt =
+      doc.version === 2 && invocation?.consentId
+        ? doc.scheduler?.consents[invocation.consentId]
+        : undefined;
+    if (
+      !owner ||
+      owner.cancelling ||
+      owner.invocationId !== invocationId ||
+      !invocation ||
+      !["active", "paused"].includes(invocation.state) ||
+      !receipt ||
+      receipt.state !== "confirmed"
+    )
+      return err(
+        new WorkflowError(
+          "WORKFLOW_NOT_AUTHORIZED",
+          "Execution consent no longer authorizes this run.",
+        ),
+      );
+    const profiles = owner.profiles();
+    if (!profiles.ok)
+      return err(
+        new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Execution profiles are unavailable.", {
+          cause: profiles.error,
+        }),
+      );
+    return validateExecutionConsent(
+      doc,
+      receipt,
+      root.worktree?.path ?? homedir(),
+      Object.fromEntries(
+        profiles.value.map((profile) => [profile.name, executionProfileSnapshot(profile)]),
+      ),
+    );
+  }
+
   private checkTaskWrite(doc: WorkflowDocument, execution: Execution): Result<void, ExpectedError> {
     const actor = this.boundAuthority(execution);
     if (!actor?.binding)
@@ -1768,6 +2171,16 @@ export class SessionRegistry {
     if (!opened.value) return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared."));
     if (!this.ownerCurrent(execution, root, generation) || execution.closing || execution.settled)
       return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Run is no longer active."));
+    if (execution.operationId && opened.value.doc.version === 2) {
+      const admission = opened.value.doc.scheduler?.admissions[execution.operationId];
+      const invocation = opened.value.doc.scheduler?.invocations.find(
+        (item) => item.id === admission?.invocationId,
+      );
+      if (invocation?.kind === "execute") {
+        const allowed = this.checkExecutionConsent(root, opened.value.doc, invocation.id);
+        if (!allowed.ok) return allowed;
+      }
+    }
     return this.checkTaskWrite(opened.value.doc, execution);
   }
 
@@ -1851,7 +2264,17 @@ export class SessionRegistry {
             inputs.dependencies.some(
               (input) => input.artifactId === artifactId && input.revision === Number(revision),
             ) &&
-            task.dependsOn.includes(artifact.taskId);
+            (task.dependsOn.includes(artifact.taskId) ||
+              (actor.operationId &&
+                doc.version === 2 &&
+                doc.scheduler?.admissions[actor.operationId]?.frozenInputs.includes(
+                  command.artifact,
+                ) &&
+                this.checkExecutionConsent(
+                  root,
+                  doc,
+                  doc.scheduler.admissions[actor.operationId]!.invocationId!,
+                ).ok));
           if (!frozenInput) return denied();
           if (task.declaredRevision !== undefined && inputs.boundRevision < task.declaredRevision)
             return err(
@@ -1881,6 +2304,27 @@ export class SessionRegistry {
       return ok(status);
     }
     const mutate = (doc: WorkflowDocument): WorkflowPolicyResult => {
+      if (actor.operationId && doc.version === 2) {
+        const admission = doc.scheduler?.admissions[actor.operationId];
+        const invocation = doc.scheduler?.invocations.find(
+          (item) => item.id === admission?.invocationId,
+        );
+        if (invocation?.kind === "execute") {
+          const allowed = this.checkExecutionConsent(root, doc, invocation.id);
+          if (!allowed.ok) return allowed;
+          if (
+            binding?.role === "verifier" &&
+            "revision" in command &&
+            command.revision !== admission?.submittedRevision
+          )
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Scheduled QA may only judge its frozen submitted revision.",
+              ),
+            );
+        }
+      }
       const authorized = authorize(doc);
       if (!authorized.ok) return authorized;
       if (actor.purpose && !["analysis", "publish-plan"].includes(command.action))
@@ -2023,6 +2467,25 @@ export class SessionRegistry {
             ),
         );
     if (!result.ok) return result;
+    for (const member of this.workflowMembers(root, result.value.doc))
+      member.executionOwnership?.driver.observe({ kind: "published" });
+    if (command.action === "declare" && root.schedulerOwnership) {
+      const started = await root.schedulerOwnership.initialize();
+      if (!started.ok) return started;
+    }
+    if (
+      ["declare", "assign", "reassign", "continue", "split", "publish-plan"].includes(
+        command.action,
+      )
+    ) {
+      // Binding generations can change from any canonical workflow member, not just
+      // the conversation that owns admission. Settlement still gates replacement.
+      for (const member of this.workflowMembers(root, result.value.doc)) {
+        member.schedulerOwnership?.driver.observe({
+          kind: command.action === "publish-plan" ? "published" : "declared",
+        });
+      }
+    }
     if (command.action === "publish-plan") {
       const artifact = result.value.doc.artifacts[command.artifactId]?.revisions.at(-1);
       return ok({
@@ -2037,6 +2500,405 @@ export class SessionRegistry {
     return ok({
       ...result.value.outcome,
       status: renderWorkflowStatus(result.value.doc, binding?.taskId).slice(0, 12000),
+    });
+  }
+
+  async workflow(
+    sessionId: string,
+    conversationId: string,
+    command: WorkflowCommand,
+    provenance: UserCommandProvenance,
+  ): Promise<Result<string, ExpectedError>> {
+    const selected = this.modelOwner(sessionId, conversationId);
+    if (!selected.ok) return selected;
+    const root = selected.value;
+    if (provenance.kind !== "user-command" || provenance.conversationId !== conversationId)
+      return err(
+        new WorkflowError(
+          "WORKFLOW_NOT_AUTHORIZED",
+          "Workflow controls require direct user-command provenance.",
+        ),
+      );
+    const pending = (root.schedulerControl ?? Promise.resolve()).then(() =>
+      this.applyWorkflowCommand(root, command, provenance),
+    );
+    root.schedulerControl = pending;
+    try {
+      const result = await pending;
+      if (!result.ok) return result;
+      const notice = await root.executor?.appendNotice?.(result.value);
+      return notice && !notice.ok
+        ? ok(
+            `${result.value}\n[${notice.error.code}] Action accepted; transcript persistence unconfirmed.`,
+          )
+        : result;
+    } finally {
+      if (root.schedulerControl === pending) delete root.schedulerControl;
+    }
+  }
+
+  private async applyWorkflowCommand(
+    root: OpenExecution,
+    command: WorkflowCommand,
+    provenance: UserCommandProvenance,
+  ): Promise<Result<string, ExpectedError>> {
+    const opened = await this.openTaskWorkflow(root);
+    if (!opened.ok) return opened;
+    if (!opened.value)
+      return err(new WorkflowError("WORKFLOW_NOT_FOUND", "This conversation has no workflow."));
+    const doc = opened.value.doc;
+    await this.retireCompletedExecution(root, doc);
+    if (!doc.members.some((member) => member.conversationId === provenance.conversationId))
+      return err(
+        new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Conversation is not a workflow member."),
+      );
+    const status = (current: WorkflowDocument) =>
+      [
+        renderWorkflowStatus(current, command.kind === "status" ? command.id : undefined),
+        ...(current.version === 2
+          ? (current.scheduler?.invocations.map(
+              (item) =>
+                `Invocation ${item.id} | ${item.kind} | ${item.state}${item.consentId ? ` | consent ${item.consentId}` : ""}`,
+            ) ?? [])
+          : []),
+        ...(current.version === 2
+          ? Object.entries(current.tasks)
+              .filter(([, task]) => task.schedule)
+              .map(
+                ([id, task]) => `${id} | ${task.schedule!.state} | ${task.schedule!.reason ?? "-"}`,
+              )
+          : []),
+        ...(current.version === 2
+          ? Object.entries(current.scheduler?.admissions ?? {}).map(
+              ([operationId, item]) =>
+                `Operation ${operationId} | ${item.taskId}/${item.role} | ${item.state} | profile ${item.effectiveProfile.id} | run ${item.runId ?? "not launched"}${item.stopReason ? ` | ${item.stopReason}` : ""}`,
+            )
+          : []),
+        "Controls: /workflow status | pause [id] | resume [id] | cancel [id] | start <all|taskIds> [--auto-repair]",
+        "Cancellation retains changes and artifacts; closing a view is not cancellation.",
+      ]
+        .join("\n")
+        .slice(0, 60000);
+    if (command.kind === "status") return ok(status(doc));
+    const liveExecution = root.executionOwnership;
+    const configuration =
+      root.executor?.workflowScheduler ??
+      (liveExecution
+        ? { profiles: () => liveExecution.profiles() }
+        : root.schedulerOwnership
+          ? { profiles: () => ok([] as AgentProfile[]) }
+          : undefined);
+    if (!configuration)
+      return err(
+        new CapabilityError(
+          "Enable radian.workflowScheduler='on' explicitly before controlling scheduled work.",
+        ),
+      );
+    const profiles =
+      command.kind === "pause" || command.kind === "cancel"
+        ? ok([] as AgentProfile[])
+        : configuration.profiles();
+    if (!profiles.ok) return profiles;
+    const snapshots = Object.fromEntries(
+      profiles.value.map((profile) => [profile.name, executionProfileSnapshot(profile)]),
+    );
+    const worktree = root.worktree?.path ?? homedir();
+    const persist = async (mutate: (current: WorkflowDocument) => WorkflowPolicyResult) =>
+      mutateWorkflow(
+        opened.value!.location,
+        doc.origin,
+        (current) =>
+          current
+            ? mutate(current)
+            : err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared.")),
+        { requireVersion: 2 },
+      );
+    if (command.kind === "start") {
+      const preview = previewExecution(
+        doc,
+        command.tasks,
+        worktree,
+        snapshots,
+        provenance,
+        command.autoRepair,
+        crypto.randomUUID(),
+      );
+      if (!preview.ok) return preview;
+      const saved = await persist((current) => {
+        if (current.version !== 2)
+          return err(new WorkflowError("WORKFLOW_CONFLICT", "Expected v2 storage."));
+        const valid = validateExecutionConsent(current, preview.value, worktree, snapshots);
+        if (!valid.ok) return valid;
+        current.scheduler ??= { invocations: [], admissions: {}, consents: {} };
+        current.scheduler.consents[preview.value.id] = preview.value;
+        current.revision++;
+        return ok({ doc: current, effects: [], outcome: { kind: "applied" } });
+      });
+      return saved.ok ? renderConsent(preview.value, saved.value.doc, snapshots) : saved;
+    }
+    if (command.kind === "confirm") {
+      if (
+        [...this.entries.values()].some(
+          (entry) =>
+            entry.scope.kind === root.scope.kind &&
+            entry.worktree?.path === root.worktree?.path &&
+            (entry.executor?.busy || entry.executor?.state.status === "working"),
+        )
+      )
+        return err(
+          new SessionError(
+            "SESSION_BUSY",
+            "Wait for model work in this worktree to settle before confirming execution.",
+          ),
+        );
+      if (
+        this.workflowMembers(root, doc).some(
+          (member) => member.schedulerOwnership || member.executionOwnership,
+        )
+      )
+        return err(
+          new WorkflowError(
+            "WORKFLOW_CONFLICT",
+            "Cancel the current scheduler before confirming a new execution.",
+          ),
+        );
+      const invocationId = `execute-${command.id}`;
+      const driver = this.executionScheduler(root, configuration, command.id);
+      root.executionOwnership = {
+        invocationId,
+        consentId: command.id,
+        driver,
+        profiles: () => configuration.profiles(),
+      };
+      const committed = await persist((current) => {
+        const receipt = current.version === 2 ? current.scheduler?.consents[command.id] : undefined;
+        if (
+          !receipt ||
+          receipt.conversationId !== provenance.conversationId ||
+          receipt.state !== "preview"
+        )
+          return err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "No matching unconfirmed execution preview.",
+            ),
+          );
+        const valid = validateExecutionConsent(current, receipt, worktree, snapshots);
+        if (!valid.ok) return valid;
+        receipt.state = "confirmed";
+        receipt.confirmedAt = provenance.receivedAt;
+        current.revision++;
+        return ok({ doc: current, effects: [], outcome: { kind: "applied" } });
+      });
+      if (!committed.ok) {
+        await driver.shutdown();
+        delete root.executionOwnership;
+        return committed;
+      }
+      const started = await driver.control({
+        kind: "started",
+        invocationId,
+        baselineRevision: committed.value.doc.revision,
+      });
+      if (!started.ok) {
+        await driver.shutdown();
+        delete root.executionOwnership;
+        return started;
+      }
+      return ok(
+        `Execution ${invocationId} admitted under consent ${command.id}. Use /workflow status.`,
+      );
+    }
+    const invocation =
+      doc.version === 2
+        ? doc.scheduler?.invocations.findLast((item) =>
+            command.id
+              ? item.id === command.id
+              : item.id === root.executionOwnership?.invocationId ||
+                item.id === root.schedulerOwnership?.invocationId,
+          )
+        : undefined;
+    if (!invocation)
+      return err(
+        new WorkflowError(
+          "WORKFLOW_NOT_FOUND",
+          "No matching scheduler invocation. Use /workflow status and its exact ID.",
+        ),
+      );
+    const kind =
+      command.kind === "pause" ? "paused" : command.kind === "resume" ? "resumed" : "cancelled";
+    if (invocation.state === "cancelled" || invocation.state === "completed")
+      return command.kind === "cancel"
+        ? ok(status(doc))
+        : err(new WorkflowError("WORKFLOW_CONFLICT", "Terminal invocations cannot resume."));
+    if (invocation.kind === "plan") {
+      const controlled = await this.applyPlanningSchedulerControl(root, {
+        kind,
+        invocationId: invocation.id,
+      });
+      return controlled.ok ? ok(`Planning ${invocation.id}: ${kind}.`) : controlled;
+    }
+    if (
+      this.workflowMembers(root, doc).some(
+        (member) => member !== root && member.executionOwnership?.invocationId === invocation.id,
+      )
+    )
+      return err(
+        new WorkflowError("WORKFLOW_CONFLICT", "Another conversation owns this execution."),
+      );
+    if (root.executionOwnership && root.executionOwnership.invocationId !== invocation.id)
+      return err(
+        new WorkflowError(
+          "WORKFLOW_CONFLICT",
+          "Control does not target the current execution owner.",
+        ),
+      );
+    const receipt =
+      doc.version === 2 && invocation.consentId
+        ? doc.scheduler?.consents[invocation.consentId]
+        : undefined;
+    if (!receipt)
+      return err(new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Execution consent is unavailable."));
+    if (kind === "resumed") {
+      const valid = validateExecutionConsent(doc, receipt, worktree, snapshots);
+      if (!valid.ok) return valid;
+    }
+    const driver =
+      root.executionOwnership?.driver ?? this.executionScheduler(root, configuration, receipt.id);
+    if (!root.executionOwnership) {
+      const recovered = await driver.control({ kind: "restarted", invocationId: invocation.id });
+      if (!recovered.ok) {
+        await driver.shutdown();
+        return recovered;
+      }
+      root.executionOwnership = {
+        invocationId: invocation.id,
+        consentId: receipt.id,
+        driver,
+        profiles: () => configuration.profiles(),
+      };
+    }
+    if (kind === "cancelled" && root.executionOwnership) root.executionOwnership.cancelling = true;
+    const controlled = await driver.control({ kind, invocationId: invocation.id });
+    if (!controlled.ok) return controlled;
+    if (kind === "cancelled") {
+      await driver.shutdown();
+      delete root.executionOwnership;
+    }
+    return ok(`Execution ${invocation.id}: ${kind}. Accepted changes were retained.`);
+  }
+
+  private async retireCompletedExecution(
+    root: OpenExecution,
+    doc: WorkflowDocument,
+  ): Promise<void> {
+    const owner = root.executionOwnership;
+    const invocation =
+      doc.version === 2
+        ? doc.scheduler?.invocations.find((item) => item.id === owner?.invocationId)
+        : undefined;
+    if (
+      owner &&
+      invocation &&
+      ["completed", "cancelled"].includes(invocation.state) &&
+      ![...this.descendants(root)].some((run) => this.active(run) && run.operationId)
+    ) {
+      await owner.driver.shutdown();
+      if (root.executionOwnership === owner) delete root.executionOwnership;
+    }
+  }
+
+  private executionScheduler(
+    root: OpenExecution,
+    configuration: NonNullable<SessionExecutor["workflowScheduler"]>,
+    consentId: string,
+  ): PlanningSchedulerDriver {
+    return new PlanningSchedulerDriver({
+      profiles: () => (root.executionOwnership?.cancelling ? ok([]) : configuration.profiles()),
+      snapshot: executionProfileSnapshot,
+      runs: () =>
+        [...this.entries.values()]
+          .filter(
+            (entry) =>
+              entry.worktree?.path === root.worktree?.path && entry.scope.kind === root.scope.kind,
+          )
+          .flatMap((entry) =>
+            [...this.descendants(entry)].map((run) => ({
+              id: run.id,
+              ...(run.operationId ? { operationId: run.operationId } : {}),
+              active: this.active(run),
+            })),
+          ),
+      commit: async (event, runs) => {
+        if (!this.ownerCurrent(root, root, root.generation)) return err(new CancelledError());
+        const opened = await this.openTaskWorkflow(root);
+        if (!opened.ok) return opened;
+        if (!opened.value)
+          return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared."));
+        let intents: SchedulerIntent[] = [];
+        const committed = await mutateWorkflow(
+          opened.value.location,
+          opened.value.doc.origin,
+          (doc) => {
+            if (!doc) return err(new WorkflowError("WORKFLOW_NOT_FOUND", "Workflow disappeared."));
+            const result = scheduleExecution(doc, runs, event, consentId);
+            if (!result.ok) return result;
+            intents = result.value.intents;
+            return ok({ doc: result.value.doc, effects: [], outcome: { kind: "applied" } });
+          },
+          { requireVersion: 2 },
+        );
+        if (committed.ok) entrySummary(root, committed.value.doc);
+        this.emit();
+        return committed.ok ? ok({ doc: committed.value.doc, intents }) : committed;
+      },
+      launch: async (operationId, admission, profile) => {
+        const opened = await this.openTaskWorkflow(root);
+        if (!opened.ok) return opened;
+        const task = opened.value?.doc.tasks[admission.taskId];
+        if (!task || task.kind !== "implement")
+          return err(
+            new WorkflowError("WORKFLOW_NOT_AUTHORIZED", "Not an assigned implementation task."),
+          );
+        const role = admission.role;
+        const instructions =
+          role === "implementer"
+            ? "Implement only the assigned scope. Preserve other changes. Run relevant checks, then radian-task submit. Do not declare your own QA pass."
+            : role === "verifier"
+              ? `Independently verify submitted revision ${admission.submittedRevision}. Do not edit product files. Record findings/verdict through radian-task for this exact revision; blocked is not pass.`
+              : `Read-only analysis of locked defect ${admission.defectId}. Use radian-task analysis. Do not repair or reset locks; wait for the user's direct /repair command.`;
+        return this.spawnChild(
+          root,
+          root,
+          root.generation,
+          profile.name,
+          `${instructions}\nTask ${task.id}: ${task.title}\nScope: ${task.scope}\nFrozen plan inputs: ${admission.frozenInputs.join(", ") || "none"}\nDo not commit, install dependencies, change global settings or restart the host.`,
+          {
+            background: true,
+            profile: { ...profile, effectiveProfile: admission.effectiveProfile },
+            ...(role === "lead" ? { purpose: "analysis" as const } : {}),
+            requestedBinding: {
+              id: task.id,
+              role,
+              ...(admission.defectId && role !== "lead" ? { defectId: admission.defectId } : {}),
+              ...(admission.attemptId && role === "verifier"
+                ? { attemptId: admission.attemptId }
+                : {}),
+            },
+            schedulerAdmission: { operationId, admission },
+          },
+        );
+      },
+      stop: async (operationId) => {
+        const run = [...this.descendants(root)].find((item) => item.operationId === operationId);
+        return run ? this.closeExecution(run) : ok(undefined);
+      },
+      report: (error) => {
+        console.warn(`[radian:execution-scheduler] ${error.code}: ${error.message}`);
+      },
+      unexpected: (error) => {
+        reportUnexpected(error, "execution scheduler");
+      },
     });
   }
 
@@ -2250,6 +3112,48 @@ export class SessionRegistry {
 
     const entry = selected.value;
     if (query.kind === "argument") {
+      if (query.command === "workflow") {
+        const choices: CompletionItem[] = [
+          ...["status", "pause", "resume", "cancel"].map((value) => ({
+            kind: "argument" as const,
+            value,
+            description: `${value} the current workflow invocation`,
+          })),
+          {
+            kind: "argument",
+            value: "start all",
+            description: "Preview the dependency-closed implementation scope (does not start work)",
+          },
+        ];
+        const opened = await this.openTaskWorkflow(entry);
+        if (!opened.ok) return opened;
+        const doc = opened.value?.doc;
+        if (doc)
+          for (const task of Object.values(doc.tasks))
+            if (task.kind === "implement" && task.status !== "cancelled")
+              choices.push({
+                kind: "argument",
+                value: `start ${task.id}`,
+                description: task.title,
+              });
+        if (doc?.version === 2 && doc.scheduler) {
+          for (const invocation of doc.scheduler.invocations)
+            for (const action of ["status", "pause", "resume", "cancel"])
+              choices.push({
+                kind: "argument",
+                value: `${action} ${invocation.id}`,
+                description: `${invocation.kind} ${invocation.state}`,
+              });
+          for (const receipt of Object.values(doc.scheduler.consents))
+            if (receipt.state === "preview")
+              choices.push({
+                kind: "argument",
+                value: `confirm ${receipt.id}`,
+                description: "Explicitly approve the displayed execution scope",
+              });
+        }
+        return ok(filterCompletions(choices, query.query));
+      }
       if (!query.command)
         return err(new InputError("Argument completion requires a command name."));
       const result =
@@ -2305,6 +3209,7 @@ export class SessionRegistry {
       ...(executor.models && executor.selectModel ? [modelCommand] : []),
       historyCommand,
       repairCommand,
+      workflowCommand,
       dashboardCommand,
       accountsCommand,
     ];
@@ -2423,6 +3328,26 @@ export class SessionRegistry {
     onAccepted?: () => void,
     imagePaths: readonly string[] = [],
   ): Promise<Result<void, ExpectedError>> {
+    const workflow = parseWorkflowCommand(text);
+    if (!workflow.ok) return workflow;
+    if (workflow.value)
+      return err(new CapabilityError("Use the host /workflow command. No model prompt was sent."));
+    const current = this.entries.get(id);
+    if (
+      current &&
+      [...this.entries.values()].some(
+        (entry) =>
+          entry.executionOwnership &&
+          entry.scope.kind === current.scope.kind &&
+          entry.worktree?.path === current.worktree?.path,
+      )
+    )
+      return err(
+        new SessionError(
+          "SESSION_BUSY",
+          "Scheduled execution owns this worktree. Use /workflow controls; cancel it before starting unrelated model work.",
+        ),
+      );
     const repair = parseRepairCommand(text);
     if (!repair.ok) return repair;
     if (repair.value)
@@ -2649,6 +3574,34 @@ export class SessionRegistry {
     return this.trackScoped(previous.scope, task);
   }
 
+  /** All root lifecycles share the same host capabilities and factory policy. */
+  private rootFactoryOptions(
+    id: string,
+    generation: string,
+    scope: SessionScope,
+    cwd: string,
+  ): SessionContext {
+    return {
+      cwd,
+      scope,
+      ...(scope.kind === "code" ? { worktreeId: scope.worktreeId } : {}),
+      role: "main",
+      isUiActive: () => this.uiActive,
+      spawnSubagent: (name, task, signal) => this.spawnSubagent(id, name, task, signal, generation),
+      coordinateSubagents: (command, signal, purpose, target) =>
+        this.coordinateSubagents(id, generation, command, signal, purpose, target),
+      controlPlanningScheduler: (command) => this.controlPlanningScheduler(id, command),
+      planningSchedulerOwnership: () => {
+        const ownership = this.entries.get(id)?.schedulerOwnership;
+        return ownership
+          ? { invocationId: ownership.invocationId, state: ownership.state }
+          : undefined;
+      },
+      coordinateTask: (command, callId, signal, profiles) =>
+        this.coordinateTask(id, generation, undefined, command, callId, signal, profiles),
+    };
+  }
+
   private async replaceSession(
     previous: OpenExecution,
     epoch: number,
@@ -2670,17 +3623,14 @@ export class SessionRegistry {
     const previousSessionFile = previous.executor?.sessionFile;
     const ready = capture(() =>
       this.factory({
-        cwd: previous.worktree?.path ?? homedir(),
-        scope: previous.scope,
-        ...(previous.scope.kind === "code" ? { worktreeId: previous.scope.worktreeId } : {}),
-        role: "main",
-        isUiActive: () => this.uiActive,
+        ...this.rootFactoryOptions(
+          previous.id,
+          generation,
+          previous.scope,
+          previous.worktree?.path ?? homedir(),
+        ),
         startReason: "new",
         ...(previousSessionFile ? { previousSessionFile } : {}),
-        spawnSubagent: (name, task, signal) =>
-          this.spawnSubagent(previous.id, name, task, signal, generation),
-        coordinateSubagents: (command, signal, purpose, target) =>
-          this.coordinateSubagents(previous.id, generation, command, signal, purpose, target),
       }),
     );
     const created = await ready;
@@ -2851,6 +3801,13 @@ export class SessionRegistry {
         return result;
       }
 
+      if (entry.executionOwnership) await entry.executionOwnership.driver.shutdown();
+      if (entry.schedulerOwnership) {
+        await entry.schedulerOwnership.driver.shutdown();
+        await Promise.all(
+          [...this.descendants(entry)].flatMap((run) => (run.completion ? [run.completion] : [])),
+        );
+      }
       this.retire(entry, archived);
       this.entries.delete(id);
       if (entry.fileKey && this.fileOwners.get(entry.fileKey) === id) {
@@ -2999,7 +3956,17 @@ export class SessionRegistry {
       if (!allowed.ok) return allowed;
     }
     const owned = this.ownedBy(node);
+    const schedulerOwnsPlanning = root.schedulerOwnership !== undefined;
     if (command.action === "spawn") {
+      if (node === root && schedulerOwnsPlanning && purpose === "planning")
+        return err(
+          new WorkflowError(
+            "WORKFLOW_NOT_AUTHORIZED",
+            root.schedulerOwnership?.state !== "active"
+              ? "Scheduler cleanup is still pending; retry cancel before manually spawning branch leads."
+              : "Scheduler mode owns branch lead admission; declare and observe instead.",
+          ),
+        );
       if (target && target.name !== command.agent)
         return err(new InputError("The resolved agent profile does not match the request."));
       const background = command.async !== false;
@@ -3017,7 +3984,9 @@ export class SessionRegistry {
       });
       return result.ok ? ok(this.childStatus(owned.get(childId!)!, true, purpose)) : result;
     }
-    const children = command.id ? [owned.get(command.id)] : [...owned.values()];
+    const children = command.id
+      ? [owned.get(command.id)]
+      : [...owned.values()].filter((child) => !purpose || child.purpose === purpose);
     if (children.some((child) => !child))
       return err(new InputError("This run does not belong to the current owner."));
     const runs = children as Execution[];
@@ -3106,6 +4075,12 @@ export class SessionRegistry {
     return {
       id: child.id,
       agent: child.name,
+      ...((child.executor?.enforcement ?? child.enforcement)
+        ? { enforcement: child.executor?.enforcement ?? child.enforcement }
+        : {}),
+      ...((child.executor?.effectiveProfile ?? child.effectiveProfile)
+        ? { effectiveProfile: child.executor?.effectiveProfile ?? child.effectiveProfile }
+        : {}),
       ...(child.binding ? { binding: child.binding } : {}),
       ...(child.repairTarget ? { repairTarget: child.repairTarget } : {}),
       task: (child.task ?? child.request?.text)?.slice(0, detail ? 16_384 : 400),
@@ -3216,11 +4191,19 @@ export class SessionRegistry {
       readonly profile?: AgentProfile;
       readonly requestedBinding?: TaskSpawnBinding;
       readonly requireSynchronous?: boolean;
+      readonly schedulerAdmission?: { operationId: string; admission: SchedulerAdmission };
     },
   ): Promise<Result<string, ExpectedError>> {
     const { signal, background = false, onCreated, profile } = options;
+    if (profile) {
+      const admitted = profileAdmission(profile);
+      if (!admitted.ok) return admitted;
+    }
     const child: Execution = {
       id: crypto.randomUUID(),
+      ...(options.schedulerAdmission
+        ? { operationId: options.schedulerAdmission.operationId }
+        : {}),
       name,
       task,
       role: "subagent",
@@ -3235,6 +4218,22 @@ export class SessionRegistry {
     };
     try {
       let purpose = owner.purpose ?? options.requestedBinding?.purpose ?? options.purpose;
+      if (
+        !options.schedulerAdmission &&
+        !purpose &&
+        [...this.entries.values()].some(
+          (entry) =>
+            entry.executionOwnership &&
+            entry.worktree?.path === root.worktree?.path &&
+            entry.scope.kind === root.scope.kind,
+        )
+      )
+        return err(
+          new WorkflowError(
+            "WORKFLOW_NOT_AUTHORIZED",
+            "Execution scheduler owns write-capable admission in this worktree.",
+          ),
+        );
       if (signal?.aborted) return err(new CancelledError());
       if (!this.ownerCurrent(owner, root, generation))
         return err(new CancelledError("This owner can no longer start subagents."));
@@ -3266,10 +4265,26 @@ export class SessionRegistry {
               : { kind: "unbound" },
         );
         if (!resolved.ok) return resolved;
-        binding = Object.freeze({ ...resolved.value, ...(purpose ? { purpose } : {}) });
-        if (binding.role === "lead" || binding.role === "verifier")
+        binding = resolved.value;
+        if (
+          binding.role === "lead" ||
+          binding.role === "verifier" ||
+          (options.schedulerAdmission && binding.role === "implementer")
+        )
           Object.assign(child, {
-            planInputs: capturePlanInputs(workflow.value.doc, binding.taskId),
+            planInputs: options.schedulerAdmission
+              ? {
+                  boundRevision: options.schedulerAdmission.admission.boundRevision!,
+                  dependencies: options.schedulerAdmission.admission.frozenInputs.map((ref) => {
+                    const separator = ref.lastIndexOf("@");
+                    return {
+                      artifactId: ref.slice(0, separator),
+                      revision: Number(ref.slice(separator + 1)),
+                    };
+                  }),
+                  missing: [],
+                }
+              : capturePlanInputs(workflow.value.doc, binding.taskId),
           });
         if (binding.role === "implementer") {
           const admitted = await this.admitTaskRepair(
@@ -3347,6 +4362,8 @@ export class SessionRegistry {
         if (!resolved.ok) return resolved;
         const authorized = authorizeTaskBinding(current.value.doc, binding, name);
         if (!authorized.ok) return authorized;
+        binding = resolved.value;
+        purpose = binding.purpose ?? purpose;
         if (repairTarget && binding.role === "implementer") {
           const attempt = current.value.doc.defects[repairTarget.defectId]?.attempts.find(
             (item) => item.id === repairTarget!.attemptId,
@@ -3364,6 +4381,67 @@ export class SessionRegistry {
       }
       if (signal?.aborted || !this.ownerCurrent(owner, root, generation))
         return err(new CancelledError());
+      if (options.schedulerAdmission && binding) {
+        const current = await this.openTaskWorkflow(root);
+        if (!current.ok) return current;
+        const doc = current.value?.doc;
+        const facts =
+          doc?.version === 2
+            ? doc.scheduler?.admissions[options.schedulerAdmission.operationId]
+            : undefined;
+        const invocation =
+          doc?.version === 2
+            ? doc.scheduler?.invocations.find((item) => item.id === facts?.invocationId)
+            : undefined;
+        if (
+          !facts ||
+          facts.state !== "launching" ||
+          facts.stopReason ||
+          invocation?.state !== "active" ||
+          facts.assignmentVersion !== binding.assignmentVersion ||
+          (invocation.kind === "plan"
+            ? facts.role !== "lead" || purpose !== "planning"
+            : facts.role !== binding.role ||
+              invocation.consentId !== root.executionOwnership?.consentId)
+        )
+          return err(
+            new WorkflowError(
+              "WORKFLOW_NOT_AUTHORIZED",
+              "Scheduler admission no longer authorizes launch.",
+            ),
+          );
+        if (invocation.kind === "execute") {
+          const checked = this.checkExecutionConsent(root, doc!, facts.invocationId!);
+          if (!checked.ok) return checked;
+          if (facts.submittedRevision !== doc!.tasks[binding.taskId]!.artifactRevision)
+            return err(
+              new WorkflowError(
+                "WORKFLOW_NOT_AUTHORIZED",
+                "Scheduled revision changed before launch.",
+              ),
+            );
+        }
+        if (!this.ownerCurrent(owner, root, generation)) return err(new CancelledError());
+      }
+      // Scheduler and manual bindings share the same synchronous reservation boundary.
+      if (
+        binding &&
+        (root.schedulerOwnership !== undefined || root.executionOwnership !== undefined) &&
+        [...this.descendants(root)].some(
+          (run) =>
+            this.active(run) &&
+            run.binding?.workflowId === binding!.workflowId &&
+            run.binding.taskId === binding!.taskId &&
+            run.binding.role === binding!.role &&
+            run.binding.assignmentVersion === binding!.assignmentVersion,
+        )
+      )
+        return err(
+          new WorkflowError(
+            "WORKFLOW_CONFLICT",
+            "This task role already has an active run; wait for cleanup or retry cancel.",
+          ),
+        );
       // Recheck capacity in the same synchronous section as the actual reservation.
       if (
         [...this.descendants(root)].filter((node) => this.active(node)).length >=
@@ -3392,6 +4470,12 @@ export class SessionRegistry {
         ...(delegating ? { delegating: true, children: new Map<string, Execution>() } : {}),
       } satisfies Partial<Execution>);
       child.channel = new SubagentChannel((event) => {
+        if (child.operationId && (event.type === "question" || event.type === "question-settled"))
+          (root.executionOwnership?.driver ?? root.schedulerOwnership?.driver)?.observe({
+            kind: event.type === "question" ? "question-opened" : "question-answered",
+            operationId: child.operationId,
+            questionId: event.type === "question" ? event.question.id : event.questionId,
+          });
         if (event.type !== "question-settled" && owner === root)
           this.notifyChild(root, child, event);
         this.emit();
@@ -3521,6 +4605,17 @@ export class SessionRegistry {
         generation,
       ).finally(async () => {
         child.settled = true;
+        if (child.operationId && !this.active(child))
+          (root.executionOwnership?.driver ?? root.schedulerOwnership?.driver)?.observe({
+            kind: "run-settled",
+            operationId: child.operationId,
+            runId: child.id,
+            outcome: child.failure
+              ? "failed"
+              : child.finishedStatus === "complete"
+                ? "completed"
+                : "interrupted",
+          });
         if (root.phase === "open" && !root.replacing) {
           const workflow = await this.openTaskWorkflow(root);
           if (!workflow.ok)
@@ -3657,6 +4752,9 @@ export class SessionRegistry {
 
     const executor = created.value;
     child.executor = executor;
+    if (executor.enforcement) Object.assign(child, { enforcement: executor.enforcement });
+    if (executor.effectiveProfile)
+      Object.assign(child, { effectiveProfile: executor.effectiveProfile });
 
     const key = await capture(() => this.fileKey(executor));
     if (!key.ok) {
@@ -3767,6 +4865,10 @@ export class SessionRegistry {
         delete execution.subtreeTask;
       } else {
         execution.closing = false;
+        if (execution.root?.phase === "open")
+          (
+            execution.root.executionOwnership?.driver ?? execution.root.schedulerOwnership?.driver
+          )?.observe({ kind: "capacity-freed" });
         this.releaseRepairClaim(execution);
         this.emit();
       }

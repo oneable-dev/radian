@@ -81,6 +81,56 @@ Plain `/plan` ignores the binding and includes this notice in request and report
 `commandAgents.plan (<profile>) is a legacy single-planner binding and is not used by hierarchical /plan; run /plan --single to use it.`
 There is no automatic sidecar migration, root super-planner, execution or approval.
 
+## Opt-in deterministic planning scheduler
+
+The scheduler is **off by default**. Only Pi SettingsManager extension settings
+`{"radian":{"workflowScheduler":"on"}}` enable it; `"off"` or an absent setting preserves the
+model-driven declare/spawn/wait workflow and deterministic injected prompt text. Invalid values
+produce a Result diagnostic and are treated as off. No default-off scheduler write or v2 migration
+occurs. The first opted-in scheduler write uses `mutateWorkflow({requireVersion: 2})` and the existing
+lossless migration/backup contract. `/plan --single` remains model-driven.
+
+In scheduler mode the root declares branches, observes `radian-plan report`, and answers owned
+questions with `radian-subagent reply`, rather than spawning leads or polling wait/status. The pure
+`schedule(doc, runs, event)` reducer consumes committed host events and produces launch/stop intents.
+Current declared branches run in declaration order when assigned planning leads have accepted,
+current prerequisite coverage and no blocking prerequisite questions. Independent branches continue
+while another lead asks its owner a question. Root/user approval and execution consent are never
+inferred. No implementation admission is possible in a planning invocation, and all descendants
+inherit planning purpose and existing read-only tool boundaries.
+
+The host commits a strict EffectiveProfile, immutable operation ID, assignment generation, and exact
+frozen prerequisite refs before launch. A single-host driver serializes events and reconciles retries
+by operation ID; uncertain outcomes never authorize a second active run for the same task role and
+generation. Initializing and cleanup-uncertain handles hold capacity. Existing depth (3), active (5)
+and retained-run (128) limits remain authoritative. Excess ready branches are `queued(capacity)` and
+admitted on confirmed capacity release. Publications and task-binding mutations (including reassignment)
+notify the owning driver. An obsolete generation requires confirmed subtree cleanup before fresh
+admission with current frozen inputs; three invalidations block that branch for the
+invocation. Missing publications block rather than silently relaunching. Frozen input reads retain
+the existing exact-revision/foreign-body authority checks.
+
+Pause prevents future admissions and stops owned scheduler runs; resume uses new admissions.
+Cancellation prevents future admission, stops owned runs and retains accepted artifacts. A stop that
+cannot confirm cleanup reports `cleanup-uncertain`, not confirmed cancellation. Restart interrupts
+active admissions and pauses the invocation without replay. Reopening while OFF leaves scheduler
+facts untouched; the next opted-in scheduler start reconciles orphan v2 invocations before creating
+new admissions. Recovery never migrates v1 on its own or replays an orphan. An enabled host can also
+finalize a known orphan invocation's cancellation after this reconciliation, but historical/unknown
+controls cannot affect a live owner's driver or guard. Purpose-scoped status/wait filter runs by
+purpose even after confirmed cancellation; an explicit foreign-purpose run ID remains invalid.
+Internal host controls remain available as `SessionRegistry.controlPlanningScheduler`.
+Direct users can inspect and control invocations through `/workflow`; see
+[Workflow execution](workflow-execution.md). These host commands never become model prompts.
+
+New strict optional v2 fields are `schedule.invocationId`; invocation `baselineRevision`,
+`invalidations`, and `schedules` (historical per-task snapshots); and admission `invocationId`,
+`boundRevision`, `declaredRevision`, `questions`, and `stopReason`. Existing v2 documents remain
+readable. A direct-user `/plan` starts a new invocation and creates distinct `queued(dependencies)`
+schedules; it does not transition an old cancelled schedule back to queued. Declaration, resume and
+notifications cannot create invocations. Old admission records, invocation budgets, schedule snapshots,
+artifacts and all repair counters/locks remain retained.
+
 ## Role routing and repair ownership
 
 - A lead owns its branch/task, assigns bounded subtasks and receives QA findings, failed rechecks and
@@ -121,9 +171,24 @@ the ancestor's `writeClosed` gate. Accepted submission closes writes before noti
 a routing failure does not reopen them. Non-verifiers additionally pass the current lock guard.
 Repair implementers need the exact automated attempt still authorized for their task and claimed by
 that run; initial implementers require no unresolved defect and cannot continue after their own
-submission awaiting QA. Verifiers may run tools for QA after binding/purpose/closed checks: their
-product-code editing prohibition is a role instruction, not a tool sandbox. Missing, corrupt or
-otherwise unavailable workflow state fails closed. Host protocol calls use their own authorization.
+submission awaiting QA. Verifiers may run verification tools after binding/purpose/closed checks.
+Built-in children use their frozen EffectiveProfile tool ceiling, including overlay narrowing, for
+both model tool visibility and the `tool_call` boundary (also used by nested `ctx.executeTool` calls).
+Built-in QA always denies the known Pi product-edit tools `edit` and `write`. Lead-only built-ins
+(product-lead, tech-lead, ui-ux-lead) deny those tools unless bound as implementer. Engineer, PM and
+designer retain them within their ceilings, subject to the same durable workflow recheck.
+A call outside the built-in ceiling is blocked with `[AGENT_TOOL_CEILING]`. For the finite Pi 1.2.0
+native set (`read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`), denied tools are
+replaced with host-owned denial-only implementations: direct and nested attempts return the stable
+code without invoking the real tool, even with invalid arguments. SDK `prepareLoadout.hiddenDeclarations`
+keeps these implementations out of model declarations while retaining them for dispatch. They are
+not available capabilities and do not widen enforcement facts. Permitted native tools are unchanged
+and still pass the durable authorization recheck. Non-native tools keep the existing SDK registration
+and `tool_call` policy path; unknown names are not capabilities. Custom profiles retain their existing
+`tools` allowlist behavior. Planning and analysis still admit only read/grep/find/ls within that
+allowlist/ceiling, plus host-granted protocol tools; their denied native tools use the same stable code.
+Missing, corrupt or otherwise unavailable workflow state fails closed. Host protocol calls use their
+own authorization.
 
 Root wake policy (D08) delivers only `notify-root` (human-required), cross-team effects spanning
 different top-level branches, and orphan escalations with no live responsible recipient to root.
@@ -136,11 +201,28 @@ root can still inspect status on demand.
 
 Workflow storage coordinates a single owning host, not independent writer processes. Tool authorization is a
 host tool boundary, not an OS sandbox: trusted extensions and root shell permissions remain outside
-that boundary. Readiness validates publications/diagnostics, not semantic correctness or user consent.
+that boundary. QA execution-purpose runs may reach `bash` and `mcp__*` verification tools within
+the frozen ceiling. These are host-trusted, **not sandboxed**: shell commands and generic MCP tools
+can still mutate files, including product code. A wrapper invoking `edit`/`write` through
+`ctx.executeTool` is checked again, but arbitrary extension code doing direct filesystem/process I/O,
+or a remote MCP server doing writes, is not intercepted. No semantic classification of shell commands,
+MCP operations or arbitrary tool aliases is claimed.
+Run status (`radian-subagent status`, spawn/wait detail) and saved coordination records expose
+`enforcement` facts (`toolPolicy: 'host-enforced'`, `deniedProductEdit`,
+`reachableUnsandboxed`, `verificationTrust: 'host-trusted'`, `sandboxed: false`).
+`deniedProductEdit` refers to the known Pi edit/write entry points, not every possible mutation.
+`reachableUnsandboxed` describes policy-permitted shell/MCP names or patterns, including tools that
+may register later; it is not a guarantee that a server or shell is installed or currently active.
+Planning/analysis report no such reachability. Saved records retain these historical run facts;
+legacy records without them make no enforcement claim.
+Readiness validates publications/diagnostics, not semantic correctness or user consent.
 The conservative unbound repair guard matches literal task/defect IDs in text; it cannot recognize
 aliases, paraphrases or all semantically related work. Always use explicit durable bindings rather than
-relying on text matching. Existing run depth/capacity limits still apply; planning does not queue work
-automatically or schedule implementation. Session restart retains records but does not replay tasks.
+relying on text matching. Existing run depth/capacity limits still apply. In default/legacy mode
+(scheduler OFF), planning does not queue work automatically; the opt-in scheduler queues excess ready
+planning branches as described above. Neither `/plan` mode grants implementation consent.
+Separately confirmed `/workflow` execution can schedule implementation and its exact-revision QA.
+Session restart retains records but does not replay tasks.
 
 ## Document and public types
 
@@ -279,9 +361,11 @@ A continuation stores only `<sessionFile>.workflow-link.json` with `{workflowId,
 
 ## Retention and purge
 
-Workflow records follow conversation retention, not an independent TTL. RuntimeStore and ChatStore inspect sidecars before SDK deletion, recheck fingerprints after the cleanup reservation, and store `cleanupWorkflow` with deletion intent so restart cannot delete a newly created replacement. Corrupt, foreign or changing records block deletion with the existing cleanup error path.
+Workflow records follow conversation retention, not an independent TTL. Scheduler opt-in v1-to-v2 migration creates exactly one byte-exact `<sessionFile>.workflow-v1-backup.json` alongside the origin document. The backup is a private (0600), user-owned, regular single-link file, published only after an exclusive temporary write and file fsync by atomic rename, followed by directory fsync. A crash retry verifies any existing backup's ownership, origin and fingerprint before atomically replacing it; unsafe backups block migration. Backups are not agent profiles or conversation plans.
 
-The store provides `inspectWorkflowForRetention`, `recheckWorkflowForRetention`, `deleteWorkflowForRetention` and `deleteWorkflowForPurge`. Deletion returns `removed`, `absent` or `retained`. The origin workflow is retained if any canonical continuation member has a valid SDK header and a private link pointing back to that origin. The origin SDK itself may expire. RuntimeStore/ChatStore expose `retentionWarnings: string[]`, reset per sweep; preservation warnings are not errors. Repository purge reports preserved workflow paths in `report.preserved`, not residual failures. Deleting a continuation removes only its link, never the canonical origin document.
+RuntimeStore and ChatStore inspect sidecars before SDK deletion, recheck origin and backup fingerprints after the cleanup reservation, and store `cleanupWorkflow` with deletion intent so restart cannot delete a newly created replacement. Corrupt, foreign, symlinked or changing records (including backups) block deletion with the existing cleanup error path. An absent backup is allowed, including on restart after backup deletion succeeded but origin deletion failed; a new or replaced backup never inherits the old cleanup marker's deletion authority. Retention, worktree purge and repository purge delete the backup with its origin document; verified orphan backups are also eligible for scoped purge.
+
+The store provides `inspectWorkflowForRetention`, `recheckWorkflowForRetention`, `deleteWorkflowForRetention` and `deleteWorkflowForPurge`. Deletion returns `removed`, `absent` or `retained`. The origin workflow and its migration backup are both retained if any canonical continuation member has a valid SDK header and a private link pointing back to that origin. The origin SDK itself may expire. RuntimeStore/ChatStore expose `retentionWarnings: string[]`, reset per sweep; preservation warnings are not errors. Repository purge reports preserved workflow paths in `report.preserved`, not residual failures. Deleting a continuation removes only its link, never the canonical origin document.
 
 ## Reserved user command
 

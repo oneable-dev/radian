@@ -2,6 +2,11 @@
 
 [Back to README](../README.md)
 
+Agent/workflow references: [Built-in roles and overlays](agent-roles.md),
+[Durable task collaboration](task-collaboration.md), and
+[Explicit workflow execution commands](workflow-execution.md), and the
+[Agent workflow release checklist](workflow-release-checklist.md).
+
 Detailed behavior and implementation notes, preserved from the original README.
 Source paths in prose and commands are relative to the repository root.
 
@@ -2009,18 +2014,17 @@ behavior still belongs to the package. Cache warming is disabled.
 
 #### Agent profiles and collaboration
 
-Define Markdown profiles in `~/.pi/agent/agents/*.md`. Trusted project `.pi/agents/*.md` files override
-same-named user profiles, with nearer project directories taking precedence. Profiles use YAML
-frontmatter (`name`, `description`, optional exact `provider/model` in `model`, `thinking`, `skills`,
-`tools` and `delegation`) and role instructions in the body. Unknown fields and invalid definitions
-fail explicitly. Delegation is an explicit boolean capability, independent of the role name:
+Radian ships built-in roles without requiring a global agents directory. See
+[Agent roles and personal-profile migration](agent-roles.md) for canonical IDs, narrowing-only
+personal/project overlays, diagnostics, frozen run configuration and the legacy-discovery switch.
+Custom Markdown profiles remain supported. Their delegation is an explicit boolean capability:
 
 ```yaml
 delegation:
   enabled: true
 ```
 
-Omitting `delegation` or setting `enabled: false` preserves leaf behavior. Only the `enabled` key is
+For custom profiles, omitting `delegation` or setting `enabled: false` preserves leaf behavior. Only the `enabled` key is
 supported; target allowlists such as `allowedAgents` are not part of this contract. An authorized
 coordinator may target any profile in the host's trusted catalog, subject to workflow spawn authority.
 A coordinator with a read-only profile allowlist can launch a write-capable worker: its personal tools
@@ -2043,8 +2047,8 @@ can provide collaboration principles; no skill name or installation is required 
 `skills` is a list of required skill names whose bodies are provided with their source paths; other
 available skills stay discoverable for on-demand reading. A skill with `metadata: { parentOnly: "true" }`
 is omitted from child discovery, including required-role skill resolution. This is catalog scoping,
-not a filesystem sandbox. A `tools` list is an SDK-enforced allowlist of exact tool names or `*`
-patterns, also applying to dynamically activated extension tools. Default-selection modifiers such as
+not a filesystem sandbox. A custom profile's `tools` list is an SDK-enforced allowlist of exact tool
+names or `*` patterns, also applying to dynamically activated extension tools. Default-selection modifiers such as
 `+write` are rejected. Omitting the field uses the SDK defaults; `[]` allows child reporting plus
 host-owned coordination when `delegation.enabled` grants it. Neither tool restrictions nor role
 instructions are an OS sandbox, particularly if `bash` is allowed. The `radian-supervisor` protocol
@@ -2099,19 +2103,10 @@ The legacy `radian_subagent` spelling remains readable in stored analytics, but 
 
 #### Managing global profiles
 
-Profiles are user/project configuration, not bundled role defaults. Keep personal role instructions,
-model choices, required skills and tool allowlists in your own dotfiles or configuration repository,
-and link the profile directory into `~/.pi/agent/agents`. Radian loads profiles from the configured
-user directory and trusted project directories; it does not load them directly from a dotfiles repository.
-
-Before migrating global profiles, finish relevant work and ensure all consuming runtimes advertise
-the `recursive-delegation` capability; old strict parsers reject delegation metadata. Preserve user
-changes and back up affected configuration outside the discoverable `agents/*.md` directory. Edit the
-authoritative source of managed symlinks, not generated files or links. Update conflicting global
-instructions and command bindings, validate new profiles/model/effort/tools, then remove superseded
-profiles only after their active jobs and references have been migrated. Removing `commandAgents.plan`
-restores parent-owned planning; binding a command to a deleted profile fails explicitly. Preserve
-credentials, histories and unrelated settings.
+Personal overlays and custom profiles remain user/project configuration; built-in definitions ship
+with Radian. See the [observed inventory and removal gate](agent-roles.md#observed-personal-configuration-example-inventory-as-of-2026-11-05)
+before considering a separate, user-authorized dotfiles migration. Shared instructions, skills,
+settings and custom agents are kept; standalone Pi use of shared resources is unaffected.
 
 #### Delegation records and cleanup
 

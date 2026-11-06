@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { normalizeContext, type Api, type Model, type Tool } from "@earendil-works/pi-ai";
+import { streamSimple as streamCompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import { convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
+import { taskTool } from "./task-tool.ts";
+import { subagentTool, supervisorTool } from "./subagent-tools.ts";
+import { planProtocol } from "./task-planning.ts";
+import { ok } from "../result.ts";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +15,56 @@ import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { piSessionFactory } from "./pi-session-adapter.ts";
 import type { SessionExecutor } from "./session-registry.ts";
+
+// Minimal read-only fixture of pi-claude-code 0.1.0 src/transcript.ts
+// withoutNullVariant/normalizeInputSchema. Do not import a user's installed extension.
+function normalizeInputSchema(schema: unknown): Record<string, unknown> {
+  function withoutNull(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(withoutNull);
+    if (!value || typeof value !== "object") return value;
+    const output = Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, withoutNull(item)]),
+    );
+    if (Array.isArray(output.type) && output.type.includes("null")) {
+      const remaining = output.type.filter((type) => type !== "null");
+      output.type = remaining.length === 1 ? remaining[0] : remaining;
+    }
+    if (Array.isArray(output.anyOf)) {
+      const nonNull = output.anyOf.filter(
+        (branch) => !(branch && typeof branch === "object" && branch.type === "null"),
+      );
+      if (nonNull.length === 1 && nonNull.length !== output.anyOf.length) {
+        delete output.anyOf;
+        if (nonNull[0] && typeof nonNull[0] === "object") Object.assign(output, nonNull[0]);
+      }
+    }
+    return output;
+  }
+  const normalized = withoutNull(schema) as Record<string, unknown>;
+  for (const key of ["oneOf", "allOf", "anyOf"]) delete normalized[key];
+  normalized.type ||= "object";
+  if (
+    normalized.type === "object" &&
+    (!normalized.properties || typeof normalized.properties !== "object")
+  )
+    normalized.properties = {};
+  return normalized;
+}
+
+const hostTools: Tool[] = [
+  taskTool(async () => ok("accepted")),
+  subagentTool(),
+  supervisorTool(),
+  { ...supervisorTool(undefined, true), name: "radian-supervisor-planning" },
+  { name: "radian-plan", description: "Planning", ...planProtocol },
+];
+
+const strictCompatibleTool: Tool = {
+  name: "strict-compatible-action",
+  description: "An action-only fixture with no optional transport fields.",
+  parameters: Type.Object({ action: Type.Literal("status") }, { additionalProperties: false }),
+  constrainedSampling: { type: "json_schema", strict: "prefer" },
+};
 
 const canonicalOrigin = "https://api.anthropic.com";
 const fastBeta = "fast-mode-2026-02-01";
@@ -210,12 +267,169 @@ async function fixture(config: FixtureOptions = {}) {
   }
 }
 
+function offlineFetch(
+  handler: (...args: Parameters<typeof fetch>) => Promise<Response>,
+): typeof fetch {
+  return Object.assign(handler, {
+    preconnect() {
+      throw new Error("Unexpected network preconnect");
+    },
+  });
+}
+
 function betas(request: CapturedRequest): string[] {
   return (request.headers.get("anthropic-beta") ?? "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
 }
+
+test("host tool fields survive Claude Code normalization and native Anthropic nonstrict projection", async () => {
+  // The real Messages encoder exercises its private convertTools with strict disabled.
+  const app = await fixture();
+  try {
+    const requests: Record<string, unknown>[] = [];
+    const model = {
+      ...app.model,
+      compat: { supportsStrictTools: false },
+    } as Model<"anthropic-messages">;
+    const result = await streamSimple(model, normalizeContext({ messages: [], tools: hostTools }), {
+      apiKey,
+      maxRetries: 0,
+      fetch: offlineFetch(async (_input, init) => {
+        requests.push(JSON.parse(await new Response(init?.body).text()));
+        return streamedReply(model.id, {});
+      }),
+    }).result();
+    expect(result.stopReason).not.toBe("error");
+    const encoded = requests[0]!.tools as {
+      input_schema: Record<string, unknown>;
+      strict?: boolean;
+    }[];
+
+    // Both lossy adapters retain the full action enum and every optional action field.
+    for (const [index, tool] of hostTools.entries()) {
+      const canonical = normalizeInputSchema(tool.parameters);
+      for (const schema of [canonical, encoded[index]!.input_schema]) {
+        expect(schema.type).toBe("object");
+        expect(schema.required).toEqual(["action"]);
+        expect(schema.properties).toEqual(
+          (tool.parameters as typeof planProtocol.parameters).properties,
+        );
+        for (const key of ["anyOf", "oneOf", "allOf"]) expect(schema).not.toHaveProperty(key);
+      }
+      expect(encoded[index]).not.toHaveProperty("strict");
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("Anthropic keeps action fields optional and only constrains compatible tools", async () => {
+  const app = await fixture();
+  try {
+    const requests: Record<string, unknown>[] = [];
+    const tools = [...hostTools, strictCompatibleTool];
+    const model = {
+      ...app.model,
+      compat: { supportsStrictTools: true },
+    } as Model<"anthropic-messages">;
+    const result = await streamSimple(model, normalizeContext({ messages: [], tools }), {
+      apiKey,
+      maxRetries: 0,
+      fetch: offlineFetch(async (_input, init) => {
+        requests.push(JSON.parse(await new Response(init?.body).text()));
+        return streamedReply(model.id, {});
+      }),
+    }).result();
+
+    // Syntactic strict support must not force fields the selected host action rejects.
+    expect(result.stopReason).not.toBe("error");
+    const encoded = requests[0]!.tools as {
+      strict?: boolean;
+      input_schema: Record<string, unknown>;
+    }[];
+    expect(encoded.map((tool) => tool.strict ?? false)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    for (const [index, tool] of encoded.entries()) {
+      expect(tool.input_schema.type).toBe("object");
+      expect(tool.input_schema.required).toEqual(["action"]);
+      expect(Object.keys(tool.input_schema.properties as object)).toEqual(
+        Object.keys((tools[index]!.parameters as typeof planProtocol.parameters).properties),
+      );
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("OpenAI preserves callable host actions without forcing null-filled strict arguments", async () => {
+  // The fetch fixture never delegates to a network, even though the encoder sees a native URL.
+  const tools = [...hostTools, strictCompatibleTool];
+  const model: Model<"openai-completions"> = {
+    id: "gpt-4.1",
+    name: "Fixture",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    compat: { supportsStrictMode: true },
+  };
+  let request: Record<string, unknown> | undefined;
+  const result = await streamCompletions(model, normalizeContext({ messages: [], tools }), {
+    apiKey: "offline-openai-fixture",
+    maxRetries: 0,
+    fetch: offlineFetch(async (_input, init) => {
+      request = JSON.parse(await new Response(init?.body).text());
+      const chunk = {
+        id: "offline",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: model.id,
+        choices: [{ index: 0, delta: { content: "Done" }, finish_reason: "stop" }],
+      };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }),
+  }).result();
+
+  // Optional slots remain optional; the action-only fixture still exercises strict generation.
+  expect(result.stopReason).not.toBe("error");
+  const completions = request!.tools as {
+    function: { strict: boolean; parameters: Record<string, unknown> };
+  }[];
+  const expectedStrict = [...hostTools.map(() => false), true];
+  expect(completions.map((tool) => tool.function.strict)).toEqual(expectedStrict);
+  for (const tool of completions) {
+    expect(tool.function.parameters.type).toBe("object");
+    expect(tool.function.parameters.required).toEqual(["action"]);
+    expect(tool.function.parameters.additionalProperties).toBe(false);
+  }
+  const responses = convertResponsesTools(tools);
+  expect(responses.map((tool) => "strict" in tool && tool.strict)).toEqual(expectedStrict);
+
+  // Codex uses strict:null by default. An explicit preference must not override it incompatibly.
+  const codex = convertResponsesTools(hostTools, { strict: null, supportsStrictMode: true });
+  for (const tool of codex)
+    expect(tool).toMatchObject({
+      type: "function",
+      strict: null,
+      parameters: { required: ["action"] },
+    });
+  for (const tool of convertResponsesTools(tools, { supportsStrictMode: false }))
+    expect(tool).not.toHaveProperty("strict");
+});
 
 test("Native Anthropic Fast commands change only request preference without starting model calls", async () => {
   // A new SDK conversation has no confirmed execution speed or explicit Fast opt-in.

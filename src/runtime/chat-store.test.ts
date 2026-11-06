@@ -9,6 +9,7 @@ import { createWorkflowDocument } from "../agents/task-workflow.ts";
 import {
   mutateWorkflow,
   openWorkflow,
+  workflowBackupFilePath,
   workflowFilePath,
   workflowLinkFilePath,
   writeWorkflowLink,
@@ -338,6 +339,41 @@ async function saveChatWorkflow(record: SessionRecord) {
   );
   return doc;
 }
+
+test("CHAT retention resumes after backup removal and failed origin unlink", async () => {
+  // The persisted cleanup marker must tolerate deletion progress without accepting replacements.
+  const { store, record, sessionFile } = await prepare();
+  const workflow = await saveChatWorkflow(record);
+  expectOk(
+    await mutateWorkflow(
+      { originSessionFile: sessionFile },
+      workflow.origin,
+      (doc) => ok({ doc: doc!, effects: [], outcome: { kind: "applied" } }),
+      { requireVersion: 2 },
+    ),
+  );
+  expectOk(await store.save([{ ...record, updatedAt: Date.now() + 2000 }]));
+  const nativeUnlink = fs.unlink;
+  const failure = spyOn(fs, "unlink").mockImplementation((path) =>
+    path === workflowFilePath(sessionFile)
+      ? Promise.reject(Object.assign(new Error("Origin unlink failed"), { code: "EACCES" }))
+      : nativeUnlink(path),
+  );
+  try {
+    expect(expectError(await store.prune(30)).code).toBe("CLEANUP_FAILED");
+  } finally {
+    failure.mockRestore();
+  }
+  expect(await Bun.file(workflowBackupFilePath(sessionFile)).exists()).toBe(false);
+  const restored = new ChatStore(dirname(store.directory));
+  expectOk(await restored.load());
+
+  const removed = expectOk(await restored.prune(30));
+
+  expect(removed).toBe(1);
+  expect(await Bun.file(sessionFile).exists()).toBe(false);
+  expect(await Bun.file(workflowFilePath(sessionFile)).exists()).toBe(false);
+});
 
 test("Q17 CHAT retention deletes owned workflow records with expired SDK sessions", async () => {
   // CHAT uses the same private sidecar lifetime as worktree conversations.

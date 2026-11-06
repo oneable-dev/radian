@@ -161,6 +161,28 @@ test.each([
 );
 
 test.each([
+  ["/workflow status", [], [], "UNSUPPORTED_CAPABILITY"],
+  ["/workflow start", [], ["workflow-scheduling"], "INVALID_INPUT"],
+  ["/workflow status", ["/image.png"], ["workflow-scheduling"], "INVALID_INPUT"],
+  ["/workflow status", [], ["workflow-scheduling"], "PROTOCOL_ERROR"],
+] as const)(
+  "workflow controls reject unsafe submissions before transport: %s",
+  async (text, images, capabilities, code) => {
+    const mocked = stubFetch(async () => {
+      throw new Error("Rejected workflow must not transmit");
+    });
+    const client = new RuntimeClient(paths, { ...snapshot(), capabilities: [...capabilities] });
+    try {
+      expect(expectError(await client.prompt("session", text, images)).code).toBe(code);
+      expect(mocked).not.toHaveBeenCalled();
+    } finally {
+      await client.disconnect();
+      mocked.mockRestore();
+    }
+  },
+);
+
+test.each([
   ["WORKFLOW_NOT_FOUND", 404],
   ["WORKFLOW_STALE", 409],
   ["WORKFLOW_REPAIR_LOCKED", 409],

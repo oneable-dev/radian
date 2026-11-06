@@ -1,4 +1,5 @@
 import { open, realpath, stat } from "node:fs/promises";
+import { parseWorkflowCommand, type WorkflowCommand } from "../agents/workflow-command.ts";
 import { homedir } from "node:os";
 import { isAbsolute, relative } from "node:path";
 import { loadSessionSettings } from "../app/settings.ts";
@@ -90,7 +91,10 @@ export class ChatRuntime {
     const options = offline
       ? await offlineRuntime(`${canonicalDirectory.value}/chat/offline-agent`)
       : {};
-    const runtime = new ChatRuntime(canonicalDirectory.value, accounts, options);
+    const runtime = new ChatRuntime(canonicalDirectory.value, accounts, {
+      ...options,
+      subscriptionsOnly: !offline,
+    });
     const prepared = await capture(() => privateDirectory(runtime.store.sessionDir));
     if (!prepared.ok) return prepared;
     const loaded = await runtime.store.load();
@@ -495,9 +499,18 @@ export class ChatRuntime {
           command.action,
           command.instructions,
         );
+      case "workflow-control":
+        return this.workflow(command.sessionId, command.conversationId, command.command);
       case "task-workflow":
         return this.repair(command.sessionId, command.conversationId, command.command);
       case "prompt": {
+        const workflow = parseWorkflowCommand(command.text);
+        if (!workflow.ok) return workflow;
+        if (workflow.value) {
+          if (command.images?.length)
+            return err(new InputError("/workflow does not accept attachments."));
+          return this.workflow(command.sessionId, command.conversationId, workflow.value);
+        }
         const repair = parseRepairCommand(command.text);
         if (!repair.ok) return repair;
         if (repair.value) {
@@ -564,6 +577,28 @@ export class ChatRuntime {
           ),
         );
     }
+  }
+
+  private async workflow(
+    sessionId: string,
+    conversationId: string | undefined,
+    command: WorkflowCommand,
+  ): Promise<Result<string, ExpectedError>> {
+    const state = this.registry.details(sessionId);
+    if (!state) return err(new SessionError("SESSION_NOT_OPEN", "CHAT conversation is not open."));
+    if (!conversationId || state.conversationId !== conversationId)
+      return err(
+        new SessionError(
+          "SESSION_CONFLICT",
+          "Conversation changed; no /workflow command was accepted.",
+        ),
+      );
+    return this.registry.workflow(
+      sessionId,
+      conversationId,
+      command,
+      userCommandProvenance(conversationId, Date.now()),
+    );
   }
 
   private async repair(

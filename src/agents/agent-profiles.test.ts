@@ -5,11 +5,15 @@ import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
   childSkills,
+  delegates,
   discoverAgentProfiles,
+  findAgentProfile,
   readAgentProfile,
   roleInstructions,
 } from "./agent-profiles.ts";
 import { expectError, expectOk } from "../testing/results.ts";
+import { builtinAgents, getBuiltinAgent } from "./builtin-agents.ts";
+import { resolveCommandAgent } from "./command-agent.ts";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "radian-profiles-"));
@@ -79,7 +83,9 @@ test.each([
 
       const result = readAgentProfile(join(app.agent, "agents", "reviewer.md"));
 
-      expect(expectError(result).code).toBe("RESOURCE_UNAVAILABLE");
+      expect(expectError(result).code).toBe(
+        extra === "tools: [\n" ? "AGENT_OVERLAY_FIELD" : "RESOURCE_UNAVAILABLE",
+      );
     } finally {
       await app.cleanup();
     }
@@ -173,6 +179,120 @@ test("Delegation metadata accepts only a strict enabled boolean and keeps explic
         "RESOURCE_UNAVAILABLE",
       );
     }
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test.each([false, true])(
+  "Missing or empty personal agents directory supplies every built-in: exists=%s",
+  async (exists) => {
+    const app = await fixture();
+    try {
+      // Absence must not require profile installation or a copied private skill.
+      if (!exists) await rm(join(app.agent, "agents"), { recursive: true });
+      const profiles = expectOk(discoverAgentProfiles(app.agent, app.project, false));
+
+      expect(profiles.map(({ name }) => name)).toEqual(
+        builtinAgents.map(({ descriptor }) => descriptor.id),
+      );
+      for (const profile of profiles) {
+        expect(profile.source).toBe("builtin");
+        expect(profile.model).toBeUndefined();
+        expect(profile.thinking).toBeUndefined();
+        expect(profile.skills).toEqual([]);
+        expect(expectOk(roleInstructions(profile, []))).toContain(profile.prompt);
+        expect(findAgentProfile(profiles, `radian:${profile.name}`)).toBe(profile);
+        expect(
+          expectOk(
+            resolveCommandAgent(
+              "plan",
+              { commandAgents: { plan: `radian:${profile.name}` } },
+              profiles,
+            ),
+          ),
+        ).toBe(profile);
+      }
+    } finally {
+      await app.cleanup();
+    }
+  },
+);
+
+test("Same-name legacy files preserve prose and model but cannot widen built-in descriptor authority", async () => {
+  const app = await fixture();
+  try {
+    // Legacy role settings remain usable; authority belongs to the built-in identity instead.
+    await app.write(
+      join(app.agent, "agents"),
+      "qa",
+      "model: fixture/model\ndelegation: { enabled: true }\ntools: ['*']\n",
+    );
+    await app.write(
+      join(app.project, ".pi", "agents"),
+      "qa",
+      "delegation: { enabled: true }\ntools: [write, bash]\n",
+    );
+    await app.write(join(app.agent, "agents"), "tech-lead", "delegation: { enabled: false }\n");
+
+    const personal = expectOk(discoverAgentProfiles(app.agent, app.project, false));
+    const project = expectOk(discoverAgentProfiles(app.agent, app.project, true));
+    const qa = findAgentProfile(personal, "radian:qa")!;
+    const direct = readAgentProfile(join(app.agent, "agents", "qa.md"));
+
+    // Invalid overlays block only this identity, never replace the host's built-in prose.
+    expect(qa.diagnostics?.[0]?.code).toBe("AGENT_OVERLAY_WIDENS");
+    expect(expectError(direct).code).toBe("AGENT_OVERLAY_WIDENS");
+    expect(qa.prompt).toBe(getBuiltinAgent("qa")!.prompt);
+    expect(qa.toolCeiling).not.toContain("*");
+    expect(qa.toolCeiling).not.toContain("write");
+    expect(qa.builtin).toBe(getBuiltinAgent("qa")!.descriptor);
+    expect(delegates({ ...qa, delegation: { enabled: true } })).toBe(false);
+    expect(findAgentProfile(project, "qa")?.diagnostics?.[0]?.code).toBe("AGENT_OVERLAY_WIDENS");
+    expect(findAgentProfile(project, "qa")?.builtin).toBe(qa.builtin);
+    expect(delegates(findAgentProfile(personal, "tech-lead"))).toBe(false);
+    expect(qa.builtin?.toolCeiling).not.toContain("write");
+    expect(qa.builtin?.toolCeiling).not.toContain("bash");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Custom profiles keep discovery precedence, exact preferences and source identity", async () => {
+  const app = await fixture();
+  try {
+    await app.write(
+      join(app.agent, "agents"),
+      "custom-worker",
+      "model: fixture/custom\nskills: [custom-skill]\ntools: [read]\ndelegation: { enabled: true }\n",
+    );
+    await app.write(join(app.project, ".pi", "agents"), "custom-worker", "tools: []\n");
+
+    const personal = findAgentProfile(
+      expectOk(discoverAgentProfiles(app.agent, app.project, false)),
+      "custom-worker",
+    )!;
+    const project = findAgentProfile(
+      expectOk(discoverAgentProfiles(app.agent, app.project, true)),
+      "custom-worker",
+    )!;
+
+    expect(personal).toMatchObject({
+      source: "personal",
+      model: "fixture/custom",
+      skills: ["custom-skill"],
+      tools: ["read"],
+      delegation: { enabled: true },
+    });
+    expect(personal.builtin).toBeUndefined();
+    expect(delegates(personal)).toBe(true);
+    expect(project).toMatchObject({ source: "project", tools: [] });
+    expect(project.model).toBeUndefined();
+    expect(findAgentProfile([personal], "radian:custom-worker")).toBeUndefined();
+    await app.write(join(app.agent, "agents"), "main");
+    expect(expectError(readAgentProfile(join(app.agent, "agents", "main.md"))).message).toContain(
+      "root session",
+    );
   } finally {
     await app.cleanup();
   }

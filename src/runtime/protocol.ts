@@ -28,6 +28,8 @@ import { sessionResultSchema } from "../agents/session-attention.ts";
 import { extensionUiResponseSchema, sessionExtensionUiSchema } from "../agents/extension-ui.ts";
 
 import { ownedSubagentRecordSchema } from "../agents/subagent-record.ts";
+import { effectiveProfileSnapshotSchema } from "../agents/effective-profile.ts";
+import { workflowCommandSchema } from "../agents/workflow-command.ts";
 
 export const protocolVersion = 1;
 // Commands and PTY frames describe one operation/viewport. A workspace snapshot
@@ -69,6 +71,7 @@ const agent = Type.Object({
   ),
 });
 const session = Type.Object({
+  workflow: Type.Optional(Type.String()),
   id,
   name: Type.String(),
   status,
@@ -177,6 +180,7 @@ const execution = Type.Object({
   resourceRevision: Type.Optional(Type.Integer({ minimum: 0 })),
   status,
   activity: Type.Optional(Type.Literal("compacting")),
+  workflow: Type.Optional(Type.String()),
   output: Type.String(),
   finalOutput: Type.Optional(Type.String()),
   activeTools: Type.Optional(Type.Array(Type.String())),
@@ -406,6 +410,7 @@ export type RuntimeSnapshot = Omit<
 };
 
 export const chatSessionRecordSchema = Type.Object({
+  effectiveProfile: Type.Optional(effectiveProfileSnapshotSchema),
   id,
   name: Type.String(),
   role: Type.Optional(Type.Literal("subagent")),
@@ -424,6 +429,7 @@ export const chatSessionRecordSchema = Type.Object({
 });
 
 export const sessionRecordSchema = Type.Object({
+  effectiveProfile: Type.Optional(effectiveProfileSnapshotSchema),
   id,
   name: Type.String(),
   worktreeId: id,
@@ -564,6 +570,15 @@ const repairCommandSchema = Type.Union([
 ]);
 
 export const commandSchema = Type.Union([
+  Type.Object(
+    {
+      type: Type.Literal("workflow-control"),
+      sessionId: id,
+      conversationId: id,
+      command: workflowCommandSchema,
+    },
+    { additionalProperties: false },
+  ),
   Type.Object({ type: Type.Literal("terminal-create"), worktreeId: id, ...size }),
   Type.Object({ type: Type.Literal("terminal-close"), terminalId: id }),
   Type.Object({ type: Type.Literal("terminal-detach"), terminalId: id, lease: id }),

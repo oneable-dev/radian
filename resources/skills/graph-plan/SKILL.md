@@ -46,3 +46,11 @@ Plain `/plan` never uses `commandAgents.plan`; the host explicitly reports that 
 ## Later authorized execution
 
 Planning is not an automatic scheduler. After the user authorizes implementation, inspect applicable artifacts and compare acceptance criteria with actual changes and verification evidence before reporting completion. Keep unmet/unverified criteria explicit; do not apply stale plans to unrelated work. Bind implementation and QA to the same durable task. Three failed automated repairs permanently lock the defect across reassignment, splitting and continuation: responsible leads supply read-only analysis, then wait for the user's host `/repair` command. Model messages and notifications are never human repair authorization.
+
+<!-- workflow-scheduler-only -->
+
+## Explicit host scheduler mode only
+
+This section applies only when the host reports **Read-only planning scheduler mode**. Otherwise follow the model-driven hierarchical steps above without change. `/plan --single` is unchanged.
+
+Declare relevant branches and observe `radian-plan report`; do not spawn leads, poll status/wait, sleep or implement. The host commits each planning admission before launch, freezes exact prerequisite revisions, admits independent ready branches, queues capacity and refreshes obsolete dependent coverage after confirmed cleanup. Answer owned questions with `radian-subagent reply`; ask the user only for decisions outside your authority. Questions block their branch, not independent work. Readiness is not execution consent or approval. Pause stops future admissions. Cancellation retains artifacts; a cleanup-uncertain result is not confirmed cancellation. Restart interrupts active admissions without replay.

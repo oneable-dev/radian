@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import {
   mkdtemp,
@@ -19,6 +20,7 @@ import { createWorkflowDocument } from "../agents/task-workflow.ts";
 import {
   mutateWorkflow,
   openWorkflow,
+  workflowBackupFilePath,
   workflowFilePath,
   workflowLinkFilePath,
   writeWorkflowLink,
@@ -441,7 +443,16 @@ test("Q17 runtime retention removes the workflow alongside the SDK and plan", as
   const app = await fixture();
   try {
     const record = await app.record("workflow-expired", { age: 85, updatedAt: Date.now() + 2000 });
-    await saveWorkflow(record);
+    const workflow = await saveWorkflow(record);
+    expectOk(
+      await mutateWorkflow(
+        { originSessionFile: record.sessionFile! },
+        workflow.origin,
+        (doc) => ok({ doc: doc!, effects: [], outcome: { kind: "applied" } }),
+        { requireVersion: 2 },
+      ),
+    );
+    expect(await Bun.file(workflowBackupFilePath(record.sessionFile!)).exists()).toBe(true);
     await app.sidecar(record);
     expectOk(await app.store.save(app.manifest([record])));
 
@@ -449,6 +460,7 @@ test("Q17 runtime retention removes the workflow alongside the SDK and plan", as
 
     expect(removed).toBe(1);
     expect(await Bun.file(workflowFilePath(record.sessionFile!)).exists()).toBe(false);
+    expect(await Bun.file(workflowBackupFilePath(record.sessionFile!)).exists()).toBe(false);
     expect(await Bun.file(planFilePath(record.sessionFile!)).exists()).toBe(false);
   } finally {
     await app.close();
@@ -476,6 +488,14 @@ test("Q17 runtime retention keeps canonical safety facts for a live continuation
       ),
     );
     expectOk(await writeWorkflowLink(next.sessionFile!, nextOwner, location, owner));
+    expectOk(
+      await mutateWorkflow(
+        location,
+        owner,
+        (doc) => ok({ doc: doc!, effects: [], outcome: { kind: "applied" } }),
+        { requireVersion: 2 },
+      ),
+    );
     expectOk(await app.store.save(app.manifest([origin, next])));
 
     const removed = expectOk(await app.store.pruneExpired(30, release, now));
@@ -484,6 +504,7 @@ test("Q17 runtime retention keeps canonical safety facts for a live continuation
     expect(removed).toBe(1);
     expect(await Bun.file(origin.sessionFile!).exists()).toBe(false);
     expect(await Bun.file(workflowFilePath(origin.sessionFile!)).exists()).toBe(true);
+    expect(await Bun.file(workflowBackupFilePath(origin.sessionFile!)).exists()).toBe(true);
     expect(await Bun.file(workflowLinkFilePath(next.sessionFile!)).exists()).toBe(true);
     expect(app.store.retentionWarnings).toHaveLength(1);
     expect(linked!.doc.workflowId).toBe(doc.workflowId);
@@ -491,6 +512,85 @@ test("Q17 runtime retention keeps canonical safety facts for a live continuation
     await app.close();
   }
 });
+
+test("Runtime retention resumes its durable marker after backup removal and failed origin unlink", async () => {
+  // A restart may observe exactly the inspected origin but no longer its already deleted backup.
+  const app = await fixture();
+  try {
+    const record = await app.record("partial-backup", { age: 85, updatedAt: Date.now() + 2000 });
+    const workflow = await saveWorkflow(record);
+    expectOk(
+      await mutateWorkflow(
+        { originSessionFile: record.sessionFile! },
+        workflow.origin,
+        (doc) => ok({ doc: doc!, effects: [], outcome: { kind: "applied" } }),
+        { requireVersion: 2 },
+      ),
+    );
+    expectOk(await app.store.save(app.manifest([record])));
+    const nativeUnlink = fs.unlink;
+    const failure = spyOn(fs, "unlink").mockImplementation((path) =>
+      path === workflowFilePath(record.sessionFile!)
+        ? Promise.reject(Object.assign(new Error("Origin unlink failed"), { code: "EACCES" }))
+        : nativeUnlink(path),
+    );
+    try {
+      expect(expectError(await app.store.pruneExpired(30, release, now)).code).toBe(
+        "CLEANUP_FAILED",
+      );
+    } finally {
+      failure.mockRestore();
+    }
+    expect(await Bun.file(workflowBackupFilePath(record.sessionFile!)).exists()).toBe(false);
+    const restored = new RuntimeStore(app.paths);
+    expectOk(await restored.load("repo"));
+
+    const removed = expectOk(await restored.pruneExpired(30, release, now));
+
+    expect(removed).toBe(1);
+    expect(await Bun.file(record.sessionFile!).exists()).toBe(false);
+    expect(await Bun.file(workflowFilePath(record.sessionFile!)).exists()).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test.each(["corrupt", "foreign", "symlink"] as const)(
+  "Runtime retention rejects a %s migration backup and preserves the conversation",
+  async (kind) => {
+    // An unsafe backup must block the whole cleanup, not be silently skipped.
+    const app = await fixture();
+    try {
+      const record = await app.record("unsafe-backup", { age: 85, updatedAt: Date.now() + 2000 });
+      const doc = await saveWorkflow(record);
+      const backup = workflowBackupFilePath(record.sessionFile!);
+      const text = JSON.stringify(doc);
+      if (kind === "symlink") {
+        const target = join(app.root, "private-backup.json");
+        await writeFile(target, text, { mode: 0o600 });
+        await symlink(target, backup);
+      } else
+        await writeFile(
+          backup,
+          kind === "corrupt"
+            ? "{broken"
+            : JSON.stringify({ ...doc, origin: { ...doc.origin, conversationId: "foreign" } }),
+          { mode: 0o600 },
+        );
+      expectOk(await app.store.save(app.manifest([record])));
+
+      const result = await app.store.pruneExpired(30, release, now);
+
+      expect(expectError(result).code).toBe("CLEANUP_FAILED");
+      expect(await Bun.file(record.sessionFile!).exists()).toBe(true);
+      expect(await Bun.file(workflowFilePath(record.sessionFile!)).exists()).toBe(true);
+      expect(await Bun.file(backup).exists()).toBe(true);
+      expect(await Bun.file(await app.snapshot(record)).exists()).toBe(true);
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test("Q17 runtime workflow fingerprint race preserves the SDK and restores visible history", async () => {
   // A replacement after reservation must not inherit deletion authority from the old fingerprint.

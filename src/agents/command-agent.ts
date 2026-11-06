@@ -1,6 +1,8 @@
 import { InputError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import type { AgentProfile } from "./agent-profiles.ts";
+import { findAgentProfile, type AgentProfile } from "./agent-profiles.ts";
+import { getBuiltinAgent } from "./builtin-agents.ts";
+import { profileAdmission } from "./effective-profile.ts";
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -18,7 +20,11 @@ export function resolveCommandAgent(
   if (!object(bindings))
     return err(new InputError("commandAgents must map commands to profile names."));
   for (const [key, value] of Object.entries(bindings)) {
-    if (!name.test(key) || typeof value !== "string" || !name.test(value)) {
+    if (
+      !name.test(key) ||
+      typeof value !== "string" ||
+      (!name.test(value) && !getBuiltinAgent(value))
+    ) {
       return err(
         new InputError("commandAgents accepts command and profile names, not model settings."),
       );
@@ -28,8 +34,11 @@ export function resolveCommandAgent(
   const profileName = String(bindings[command]);
   const available = typeof profiles === "function" ? profiles() : ok(profiles);
   if (!available.ok) return available;
-  const selected = available.value.find((profile) => profile.name === profileName);
-  return selected
-    ? ok(selected)
-    : err(new InputError(`Command ${command} requires unavailable agent profile ${profileName}.`));
+  const selected = findAgentProfile(available.value, profileName);
+  if (!selected)
+    return err(
+      new InputError(`Command ${command} requires unavailable agent profile ${profileName}.`),
+    );
+  const admitted = profileAdmission(selected);
+  return admitted.ok ? ok(selected) : admitted;
 }

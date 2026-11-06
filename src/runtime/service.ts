@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises";
+import { parseWorkflowCommand, type WorkflowCommand } from "../agents/workflow-command.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { HistoryWatcher } from "../agents/history-watcher.ts";
 import { loadSessionSettings } from "../app/settings.ts";
@@ -123,6 +124,7 @@ export async function openRepositoryRuntime(
         piSessionFactory({
           ...options,
           sessionDir,
+          subscriptionsOnly: !offline,
           ...(modelRuntime ? { modelRuntime } : {}),
           ...(!offline ? { accounts } : {}),
         }),
@@ -592,6 +594,7 @@ export class WorkspaceRuntime {
         "transcript-images",
         "session-controls",
         "task-repair",
+        "workflow-scheduling",
         "session-tab-commands",
         "session-exit",
         "agent-interrupt",
@@ -1041,9 +1044,18 @@ export class WorkspaceRuntime {
 
         return this.sessionControl(command.sessionId, control, command.conversationId);
       }
+      case "workflow-control":
+        return this.workflow(command.sessionId, command.conversationId, command.command);
       case "task-workflow":
         return this.repair(command.sessionId, command.conversationId, command.command);
       case "prompt": {
+        const workflow = parseWorkflowCommand(command.text);
+        if (!workflow.ok) return workflow;
+        if (workflow.value) {
+          if (command.images?.length)
+            return err(new InputError("/workflow does not accept attachments."));
+          return this.workflow(command.sessionId, command.conversationId, workflow.value);
+        }
         const repair = parseRepairCommand(command.text);
         if (!repair.ok) return repair;
         if (repair.value) {
@@ -1262,6 +1274,28 @@ export class WorkspaceRuntime {
         setTimeout(() => this.onStop(), 20);
         return ok(null);
     }
+  }
+
+  private async workflow(
+    sessionId: string,
+    conversationId: string | undefined,
+    command: WorkflowCommand,
+  ): Promise<Result<string, ExpectedError>> {
+    const state = this.registry.details(sessionId);
+    if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+    if (!conversationId || state.conversationId !== conversationId)
+      return err(
+        new SessionError(
+          "SESSION_CONFLICT",
+          "Conversation changed; no /workflow command was accepted.",
+        ),
+      );
+    return this.registry.workflow(
+      sessionId,
+      conversationId,
+      command,
+      userCommandProvenance(conversationId, Date.now()),
+    );
   }
 
   private async repair(

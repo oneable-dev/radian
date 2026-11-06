@@ -2450,6 +2450,98 @@ test("SDK parents and subagents hide immediately and terminate in background wit
   }
 });
 
+test.each([false, true])(
+  "Root tool parity and subscription policy survive new, replaced and reopened sessions (subscriptionsOnly=%s)",
+  async (subscriptionsOnly) => {
+    const loadouts: string[][] = [];
+    const requestedProviders: string[] = [];
+    const app = await sdkFixture(false, (options) => {
+      // Both routes are scripted; a rejected paid route must never reach the transport.
+      for (const route of [
+        {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+        },
+        {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+        },
+      ])
+        options.modelRuntime!.registerProvider(route.provider, {
+          api: route.api,
+          baseUrl: route.baseUrl,
+          apiKey: "offline-parity-fixture",
+          models: [
+            {
+              id: "parity-fixture",
+              name: "Parity fixture",
+              reasoning: false,
+              input: ["text"],
+              contextWindow: 200000,
+              maxTokens: 8192,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        });
+      return {
+        ...options,
+        subscriptionsOnly,
+        model: options.modelRuntime!.getModel("openai-codex", "parity-fixture")!,
+        streamFn(model, context) {
+          const active = new Set<string>();
+          for (const message of context.messages) {
+            if (message.role !== "system") continue;
+            for (const tool of message.toolsRemoved ?? []) active.delete(tool.name);
+            for (const tool of message.toolsAdded ?? []) active.add(tool.name);
+          }
+          loadouts.push([...active].sort());
+          requestedProviders.push(model.provider);
+          const stream = createAssistantMessageEventStream();
+          const message = fixtureMessage(model.api, model.provider, model.id);
+          message.content = [{ type: "text", text: "Offline parity response" }];
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+          return stream;
+        },
+      };
+    });
+    try {
+      let id = expectOk(await app.registry.create(app.main.id));
+      for (const lifecycle of ["new", "replaced", "reopened"]) {
+        if (lifecycle === "replaced") expectOk(await app.registry.clearSession(id));
+        if (lifecycle === "reopened") {
+          const file = app.registry.sessionFile(id)!;
+          expectOk(await app.registry.close(id));
+          id = expectOk(await app.registry.create(app.main.id, file));
+        }
+        if (subscriptionsOnly) {
+          const executor = app.executors.at(-1)!;
+          expect(
+            expectOk(await executor.models!()).models.every(
+              (model) => model.provider === "openai-codex" || model.provider === "claude-code",
+            ),
+          ).toBe(true);
+          expect(
+            expectError(
+              await executor.selectModel!({ provider: "anthropic", id: "parity-fixture" }),
+            ).code,
+          ).toBe("SUBSCRIPTION_ROUTE_BLOCKED");
+        }
+        expectOk(await app.registry.prompt(id, `Inspect ${lifecycle} root tools`));
+        expect(loadouts.at(-1)).toContain("radian-task");
+        expect(loadouts.at(-1)).toContain("radian-subagent");
+        expect(loadouts.at(-1)).toEqual(loadouts[0]);
+      }
+      expect(loadouts).toHaveLength(3);
+      expect(requestedProviders).toEqual(["openai-codex", "openai-codex", "openai-codex"]);
+    } finally {
+      await app.cleanup();
+    }
+  },
+);
+
 test("Reopening closed SDK sessions restores the same saved ID and history without forking", async () => {
   // A finalized user/assistant exchange has been persisted in an isolated session directory.
   const app = await sdkFixture();

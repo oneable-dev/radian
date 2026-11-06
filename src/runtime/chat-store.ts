@@ -11,6 +11,7 @@ import {
   inspectedWorkflowSchema,
   recheckWorkflowForRetention,
   workflowFilePath,
+  workflowRetentionMatches,
 } from "../agents/task-workflow-store.ts";
 import { sessionRecordKey } from "../agents/session-snapshot.ts";
 import {
@@ -374,7 +375,7 @@ export class ChatStore {
         if (
           entry.cleanupPending &&
           !workflowAlreadyRemoved &&
-          JSON.stringify(workflow.value) !== JSON.stringify(expectedWorkflow)
+          !workflowRetentionMatches(expectedWorkflow, workflow.value)
         ) {
           failures.push(
             new StorageError("CHAT workflow changed during interrupted retention cleanup."),

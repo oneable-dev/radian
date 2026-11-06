@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { expectError, expectOk } from "../testing/results.ts";
+import { expectWorkflowMigrationRoundTrip } from "../testing/workflow-migration.ts";
 import { userCommandProvenance } from "./repair-command.ts";
 import {
   createWorkflowDocument,
@@ -133,6 +134,27 @@ function locked(): WorkflowDocument {
   return doc;
 }
 
+test.each([
+  ["initial", fixture],
+  ["discovered", discovered],
+  ["authorized", () => authorized(discovered())],
+  ["submitted", () => submitted(discovered())],
+  ["failed", () => failed(discovered(), "failed-fixture")],
+  ["locked", locked],
+] as const)(
+  "v1 %s policy fixture migrates with every durable safety fact unchanged",
+  (_name, create) => {
+    // Reuse the same builders as the repair tests, including actual three-failure history.
+    const doc = create();
+
+    expectWorkflowMigrationRoundTrip(doc);
+    if (_name === "locked") {
+      expect(doc.defects["defect-primary"]!.locked).toBe(true);
+      expect(doc.defects["defect-primary"]!.automatedFailures).toBe(3);
+    }
+  },
+);
+
 test("Q04 discovery starts at zero and the third automated failure atomically locks analysis", () => {
   // Discovery is not a repair attempt and must not spend the retry budget.
   const original = fixture();
@@ -249,9 +271,363 @@ test.each(["pass", "fail"] as const)(
       verdict === "fail" ? 1 : 0,
     );
     expect(conflicting.doc.defects["defect-primary"]!.attempts[0]!.verdicts).toHaveLength(2);
+    expect(result.doc.tasks["task-primary"]!.verification).toEqual({
+      state: verdict === "pass" ? "passed" : "failed",
+      revision: 1,
+    });
     expect(result.doc.tasks["task-primary"]!.status).toBe(verdict === "pass" ? "verified" : "open");
   },
 );
+
+test.each(["same-revision-before", "earlier-revision", "same-revision-after"] as const)(
+  "Q14 %s finding keeps another defect's pass failed and repairable",
+  (order) => {
+    // A prior failed repair makes the counter nonzero before the overlapping finding arrives.
+    let doc = failed(discovered(), "attempt-1");
+    const findOther = () => {
+      doc = expectOk(
+        recordFinding(doc, {
+          ...event(),
+          binding: binding(doc, "verifier"),
+          defectId: "defect-other",
+          revision: doc.tasks["task-primary"]!.artifactRevision,
+          summary: "Independent issue",
+          evidence: "Other QA failure",
+        }),
+      ).doc;
+    };
+    if (order === "earlier-revision") findOther();
+    doc = submitted(doc, "attempt-2");
+    if (order === "same-revision-before") findOther();
+    const command = {
+      ...event(),
+      binding: binding(doc, "verifier"),
+      defectId: "defect-primary",
+      attemptId: "attempt-2",
+      revision: 2,
+      verdict: "pass" as const,
+      evidence: "Primary issue fixed",
+    };
+
+    // Discovery and pass must commute without losing the remaining task responsibility.
+    doc = expectOk(recordVerdict(doc, command)).doc;
+    if (order === "same-revision-after") findOther();
+    const duplicate = expectOk(recordVerdict(doc, command));
+    const stale = expectOk(recordVerdict(doc, { ...command, ...event(), revision: 1 }));
+    const admitted = expectOk(
+      admitRepair(doc, {
+        ...event(),
+        binding: binding(doc, "lead"),
+        defectId: "defect-other",
+        attemptId: "repair-other",
+      }),
+    ).doc;
+
+    // Replays and old revisions preserve the failure, budget and remaining repair path.
+    expect(doc.tasks["task-primary"]!.verification).toEqual({ state: "failed", revision: 2 });
+    expect(doc.tasks["task-primary"]!.status).toBe("open");
+    expect(doc.defects["defect-primary"]!.state).toBe("resolved");
+    expect(doc.defects["defect-primary"]!.automatedFailures).toBe(1);
+    expect(doc.defects["defect-primary"]!.locked).toBe(false);
+    expect(doc.defects["defect-other"]!.automatedFailures).toBe(0);
+    expect(duplicate.doc).toEqual(doc);
+    expect(duplicate.effects).toEqual([]);
+    expect(stale.outcome).toEqual({ kind: "stale", code: "WORKFLOW_STALE" });
+    expect(stale.doc.tasks).toEqual(doc.tasks);
+    expect(stale.doc.defects).toEqual(doc.defects);
+    expect(admitted.defects["defect-other"]!.attempts[0]!.status).toBe("authorized");
+    expect(expectOk(validateWorkflowDocument(admitted))).toEqual(admitted);
+  },
+);
+
+test("Q14 passing a locked defect leaves a new finding repairable without resetting its lock", () => {
+  // Human recheck is the only path past three automated failures, not a budget reset.
+  const original = locked();
+  let doc = expectOk(
+    humanRecheck(original, {
+      ...event(),
+      provenance: userCommandProvenance("origin", 2000),
+      id: "task-primary",
+      attemptId: "manual-locked",
+    }),
+  ).doc;
+  doc = expectOk(
+    recordFinding(doc, {
+      ...event(),
+      binding: binding(doc, "verifier"),
+      defectId: "defect-other",
+      revision: 4,
+      summary: "New issue during manual QA",
+      evidence: "Other failure",
+    }),
+  ).doc;
+
+  // Resolving the locked defect must not overwrite the new finding's failed verification.
+  doc = expectOk(
+    recordVerdict(doc, {
+      ...event(),
+      binding: binding(doc, "verifier"),
+      defectId: "defect-primary",
+      attemptId: "manual-locked",
+      revision: 4,
+      verdict: "pass",
+      evidence: "Locked issue fixed",
+    }),
+  ).doc;
+  const admitted = expectOk(
+    admitRepair(doc, {
+      ...event(),
+      binding: binding(doc, "lead"),
+      defectId: "defect-other",
+      attemptId: "repair-other",
+    }),
+  ).doc;
+
+  // The old ledger remains permanently locked, while only the new defect receives admission.
+  expect(doc.tasks["task-primary"]!.verification).toEqual({ state: "failed", revision: 4 });
+  expect(doc.tasks["task-primary"]!.status).toBe("open");
+  expect(admitted.defects["defect-primary"]!.state).toBe("resolved");
+  expect(admitted.defects["defect-primary"]!.locked).toBe(true);
+  expect(admitted.defects["defect-primary"]!.automatedFailures).toBe(3);
+  expect(admitted.defects["defect-primary"]!.attempts.slice(0, 3)).toEqual(
+    original.defects["defect-primary"]!.attempts,
+  );
+  expect(admitted.defects["defect-primary"]!.analyses).toEqual(
+    original.defects["defect-primary"]!.analyses,
+  );
+  expect(admitted.defects["defect-other"]!.automatedFailures).toBe(0);
+});
+
+test.each(["defect-primary", "shared-defect"])(
+  "Q14 passing %s first respects current per-task receipts on other unresolved defects",
+  (first) => {
+    // Both defects share a manual revision, but only one spans a second task.
+    let doc = discovered();
+    doc.tasks["task-other"] = task("task-other");
+    doc = expectOk(
+      recordFinding(doc, {
+        ...event(),
+        binding: binding(doc, "verifier"),
+        defectId: "shared-defect",
+        revision: 0,
+        summary: "Shared issue",
+        evidence: "Both tasks fail",
+        responsibleTasks: ["task-other"],
+      }),
+    ).doc;
+    doc = expectOk(
+      humanRecheck(doc, {
+        ...event(),
+        provenance: userCommandProvenance("origin", 2000),
+        id: "task-primary",
+        attemptId: "manual-both",
+      }),
+    ).doc;
+
+    // Each pass resolves only its own responsibility at the submitted revision.
+    for (const defectId of [
+      first,
+      first === "defect-primary" ? "shared-defect" : "defect-primary",
+    ]) {
+      doc = expectOk(
+        recordVerdict(doc, {
+          ...event(),
+          binding: binding(doc, "verifier"),
+          defectId,
+          attemptId: "manual-both",
+          revision: 1,
+          verdict: "pass",
+          evidence: `Current QA for ${defectId}`,
+        }),
+      ).doc;
+      expect(doc.tasks["task-primary"]!.verification).toEqual({
+        state: defectId === first ? "failed" : "passed",
+        revision: 1,
+      });
+    }
+
+    // Another task's unresolved responsibility does not block a task with current receipts.
+    expect(doc.tasks["task-primary"]!.status).toBe("verified");
+    expect(doc.tasks["task-other"]!.verification).toEqual({ state: "failed", revision: 0 });
+    expect(doc.defects["shared-defect"]!.state).toBe("human-required");
+    expect(doc.defects["shared-defect"]!.resolutions?.["task-primary"]?.revision).toBe(1);
+    expect(doc.defects["shared-defect"]!.resolutions?.["task-other"]).toBeUndefined();
+  },
+);
+
+test.each(["stale-task-receipt", "other-task-receipt"])(
+  "Q14 %s cannot clear another unresolved defect after an attempt pass",
+  (receipt) => {
+    // Imported receipt data must match both the task identity and its current revision.
+    let doc = submitted(failed(discovered(), "attempt-1"), "attempt-2");
+    doc.tasks["task-other"] = task("task-other");
+    doc = expectOk(
+      recordFinding(doc, {
+        ...event(),
+        binding: binding(doc, "verifier"),
+        defectId: "shared-defect",
+        revision: 2,
+        summary: "Shared issue",
+        evidence: "Both tasks fail",
+        responsibleTasks: ["task-other"],
+      }),
+    ).doc;
+    doc.defects["shared-defect"]!.resolutions = {
+      [receipt === "stale-task-receipt" ? "task-primary" : "task-other"]: {
+        revision: receipt === "stale-task-receipt" ? 1 : 0,
+        ...event(),
+      },
+    };
+
+    const passed = expectOk(
+      recordVerdict(doc, {
+        ...event(),
+        binding: binding(doc, "verifier"),
+        defectId: "defect-primary",
+        attemptId: "attempt-2",
+        revision: 2,
+        verdict: "pass",
+        evidence: "Primary issue fixed",
+      }),
+    ).doc;
+
+    // A stale or differently scoped receipt leaves the current task repairable.
+    expect(passed.tasks["task-primary"]!.verification).toEqual({ state: "failed", revision: 2 });
+    expect(passed.tasks["task-primary"]!.status).toBe("open");
+    expect(
+      expectOk(
+        admitRepair(passed, {
+          ...event(),
+          binding: binding(passed, "lead"),
+          defectId: "shared-defect",
+          attemptId: "repair-shared",
+        }),
+      ).outcome.kind,
+    ).toBe("applied");
+  },
+);
+
+test("Q14 task-level pass cannot bypass unresolved responsibilities on a submitted repair", () => {
+  // A repair submission also exposes the task-level QA entry point.
+  const doc = submitted(discovered());
+
+  const passed = expectOk(
+    recordVerdict(doc, {
+      ...event(),
+      binding: binding(doc, "verifier"),
+      revision: 1,
+      verdict: "pass",
+      evidence: "Task-level QA without defect receipt",
+    }),
+  ).doc;
+
+  // Task-level approval cannot substitute for the outstanding attempt's resolution receipt.
+  expect(passed.tasks["task-primary"]!.verification).toEqual({ state: "failed", revision: 1 });
+  expect(passed.tasks["task-primary"]!.status).toBe("open");
+  expect(passed.defects).toEqual(doc.defects);
+});
+
+test.each([
+  ["unlocked", false],
+  ["locked", true],
+] as const)(
+  "Q16 recovery normalizes persisted passed verification with %s unresolved defects",
+  (_state, isLocked) => {
+    // Older policy versions could persist a current pass while a responsibility remained open.
+    const doc = isLocked ? locked() : failed(discovered(), "attempt-1");
+    const revision = doc.tasks["task-primary"]!.artifactRevision;
+    doc.tasks["task-primary"]!.verification = { state: "passed", revision };
+    const before = structuredClone(doc);
+    const command = event();
+
+    const recovered = expectOk(recoverWorkflow(doc, command)).doc;
+    const repeated = expectOk(recoverWorkflow(recovered, event())).doc;
+    const replayed = expectOk(recoverWorkflow(recovered, command)).doc;
+    const admission = admitRepair(recovered, {
+      ...event(),
+      binding: binding(recovered, "lead"),
+      defectId: "defect-primary",
+      attemptId: "repair-after-recovery",
+    });
+
+    // Reconciliation changes no artifact or defect history and cannot bypass a permanent lock.
+    expect(recovered.tasks["task-primary"]!.verification).toEqual({ state: "failed", revision });
+    expect(recovered.tasks["task-primary"]!.artifactRevision).toBe(revision);
+    expect(recovered.tasks["task-primary"]!.status).toBe(isLocked ? "analysis-pending" : "open");
+    expect(recovered.defects).toEqual(before.defects);
+    expect(repeated.tasks).toEqual(recovered.tasks);
+    expect(repeated.defects).toEqual(recovered.defects);
+    expect(replayed).toEqual(recovered);
+    expect(doc).toEqual(before);
+    if (isLocked) {
+      expect(expectError(admission).code).toBe("WORKFLOW_REPAIR_LOCKED");
+      expect(
+        expectError(
+          admitRepair(doc, {
+            ...event(),
+            binding: binding(doc, "lead"),
+            defectId: "defect-primary",
+            attemptId: "repair-without-recovery",
+          }),
+        ).code,
+      ).toBe("WORKFLOW_REPAIR_LOCKED");
+    } else expect(expectOk(admission).doc.defects["defect-primary"]!.attempts).toHaveLength(2);
+  },
+);
+
+test("Q14 admission reconciles persisted mixed verification without requiring a restart", () => {
+  // Admission must also work when the owning host has not run recovery yet.
+  const doc = failed(discovered(), "attempt-1");
+  doc.tasks["task-primary"]!.verification = { state: "passed", revision: 1 };
+  const original = structuredClone(doc.defects["defect-primary"]!);
+  const command = {
+    ...event(),
+    binding: binding(doc, "lead"),
+    defectId: "defect-primary",
+    attemptId: "repair-mixed-state",
+  };
+
+  const admitted = expectOk(admitRepair(doc, command)).doc;
+  const replayed = expectOk(admitRepair(admitted, command)).doc;
+
+  // Only the ordinary admission receipt and attempt are added to the unchanged safety ledger.
+  expect(admitted.tasks["task-primary"]!.verification).toEqual({ state: "failed", revision: 1 });
+  expect(admitted.tasks["task-primary"]!.artifactRevision).toBe(1);
+  expect(admitted.tasks["task-primary"]!.status).toBe("open");
+  expect(admitted.defects["defect-primary"]).toEqual({
+    ...original,
+    state: "repair-authorized",
+    attempts: [...original.attempts, admitted.defects["defect-primary"]!.attempts.at(-1)!],
+    authorizedBy: { docRevision: admitted.revision, eventKey: command.eventKey },
+  });
+  expect(replayed).toEqual(admitted);
+});
+
+test.each([
+  ["no defects", false],
+  ["a shared current receipt", true],
+] as const)("Q16 recovery preserves consistent passed verification with %s", (_state, shared) => {
+  // A shared defect may legitimately remain open only for another task.
+  const doc = fixture();
+  doc.tasks["task-primary"]!.verification = { state: "passed", revision: 0 };
+  doc.tasks["task-primary"]!.status = "verified";
+  if (shared) {
+    doc.tasks["task-other"] = task("task-other");
+    doc.defects["shared-defect"] = {
+      ...discovered().defects["defect-primary"]!,
+      id: "shared-defect",
+      responsibleTasks: ["task-primary", "task-other"],
+      resolutions: { "task-primary": { revision: 0, ...event() } },
+    };
+  }
+  const before = structuredClone(doc);
+
+  const recovered = expectOk(recoverWorkflow(doc, event())).doc;
+
+  // Recovery does not revoke valid QA or mutate any resolution receipts.
+  expect(recovered.tasks).toEqual(before.tasks);
+  expect(recovered.defects).toEqual(before.defects);
+});
 
 test("Q07 cancelling a blocked attempt never resolves or verifies it", () => {
   // Human cancellation is distinct from a successful QA recheck.
@@ -714,6 +1090,7 @@ test("Q04 initial implementation requires a verdict before becoming verified", (
 
   expect(submitted.tasks["task-primary"]!.status).toBe("open");
   expect(submitted.tasks["task-primary"]!.verification.state).toBe("awaiting-qa");
+  expect(passed.tasks["task-primary"]!.verification).toEqual({ state: "passed", revision: 1 });
   expect(passed.tasks["task-primary"]!.status).toBe("verified");
 });
 

@@ -53,18 +53,24 @@ export function resolveTaskBinding(
     if (spawner.binding.role !== "lead" || !isTaskLead(doc, spawner.binding, task.id))
       return failure("Only a current lead may spawn bound runs within its task tree.");
   }
-  if ((requested.role === "worker" || requested.role === "lead") && !requested.purpose) {
+  if (task.kind === "plan" && requested.role === "implementer")
+    return failure("Plan-kind tasks are read-only and cannot bind an implementer.");
+  let purpose =
+    spawner.kind === "bound" ? (spawner.binding.purpose ?? requested.purpose) : requested.purpose;
+  if (task.kind === "plan" && (requested.role === "lead" || requested.role === "worker"))
+    purpose = "planning";
+  if ((requested.role === "worker" || requested.role === "lead") && !purpose) {
     const allowed = guardImplementation(doc, task.id);
     if (!allowed.ok) return allowed;
   }
-  if (requested.purpose && requested.role !== "lead" && requested.role !== "worker")
+  if (purpose && requested.role !== "lead" && requested.role !== "worker")
     return failure("Read-only purpose requires a lead or its worker.");
   const binding: WorkflowBinding = {
     workflowId: doc.workflowId,
     taskId: task.id,
     role: requested.role,
     assignmentVersion: task.assignmentVersion,
-    ...(requested.purpose ? { purpose: requested.purpose } : {}),
+    ...(purpose ? { purpose } : {}),
   };
   const allowed = authorizeTaskBinding(doc, binding, profile);
   return allowed.ok ? ok(Object.freeze(binding)) : allowed;

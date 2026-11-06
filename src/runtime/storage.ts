@@ -32,8 +32,10 @@ import {
   inspectWorkflowForRetention,
   inspectedWorkflowSchema,
   recheckWorkflowForRetention,
+  workflowBackupFilePath,
   workflowFilePath,
   workflowLinkFilePath,
+  workflowRetentionMatches,
   type InspectedWorkflow,
 } from "../agents/task-workflow-store.ts";
 import {
@@ -1223,6 +1225,7 @@ export class RuntimeStore implements SessionSnapshotSource {
     for (const path of [
       workflowFilePath(entry.sessionFile),
       workflowLinkFilePath(entry.sessionFile),
+      workflowBackupFilePath(entry.sessionFile),
     ]) {
       const found = await capture(() => lstat(path));
       if (found.ok) return err(new StorageError("Cannot verify ownership of workflow sidecar."));
@@ -1281,7 +1284,7 @@ export class RuntimeStore implements SessionSnapshotSource {
     if (
       entry.cleanupPending &&
       !workflowAlreadyRemoved &&
-      JSON.stringify(workflow.value) !== JSON.stringify(expectedWorkflow)
+      !workflowRetentionMatches(expectedWorkflow, workflow.value)
     )
       return err(new StorageError("Workflow changed during interrupted retention cleanup."));
     if (
@@ -2572,22 +2575,37 @@ async function purgeFenced(
       const workflowPath =
         workflowInspection.value.kind === "ready" && workflowInspection.value.sidecar === "link"
           ? workflowLinkFilePath(file)
-          : workflowFilePath(file);
+          : workflowInspection.value.kind === "ready" &&
+              workflowInspection.value.sidecar === "backup"
+            ? workflowBackupFilePath(file)
+            : workflowFilePath(file);
       const workflow = await deleteWorkflowForPurge(file, planOwner);
       if (!workflow.ok) {
         if (conversation) conversation.failed = true;
         residual(workflowFilePath(file), workflow.error);
         continue;
       }
-      if (workflow.value === "retained")
-        preserved.push({
-          path: workflowFilePath(file),
-          reason: "Workflow retained because a live continuation still references it.",
-        });
-      else if (workflow.value === "removed") removed.push(workflowPath);
+      if (workflow.value === "retained") {
+        const retainedPaths = [workflowFilePath(file)];
+        if (workflowInspection.value.kind === "ready" && workflowInspection.value.backupFingerprint)
+          retainedPaths.push(workflowBackupFilePath(file));
+        for (const path of retainedPaths)
+          preserved.push({
+            path,
+            reason: "Workflow retained because a live continuation still references it.",
+          });
+      } else if (workflow.value === "removed") {
+        removed.push(workflowPath);
+        if (workflowInspection.value.kind === "ready" && workflowInspection.value.backupFingerprint)
+          removed.push(workflowBackupFilePath(file));
+      }
     } else {
       let unverified = false;
-      for (const path of [workflowFilePath(file), workflowLinkFilePath(file)]) {
+      for (const path of [
+        workflowFilePath(file),
+        workflowLinkFilePath(file),
+        workflowBackupFilePath(file),
+      ]) {
         const found = await capture(() => lstat(path));
         if (
           found.ok ||
@@ -2624,13 +2642,23 @@ async function purgeFenced(
     const listed = await capture(() => readdir(directory));
     if (!listed.ok) continue;
     for (const name of listed.value) {
-      const suffix = [".plan.json", ".workflow.json", ".workflow-link.json"].find((suffix) =>
-        name.endsWith(".jsonl" + suffix),
-      );
+      const suffix = [
+        ".plan.json",
+        ".workflow.json",
+        ".workflow-link.json",
+        ".workflow-v1-backup.json",
+      ].find((suffix) => name.endsWith(".jsonl" + suffix));
       if (!suffix) continue;
       const original = join(directory, name.slice(0, -suffix.length));
       const sidecar = join(directory, name);
       if (preserved.some((item) => item.path === sidecar)) continue;
+      // Removing an origin also removes its backup from this directory listing.
+      const present = await capture(() => lstat(sidecar));
+      if (!present.ok) {
+        if (!(present.error instanceof StorageError && present.error.systemCode === "ENOENT"))
+          residual(sidecar, present.error);
+        continue;
+      }
       const exists = await capture(() => lstat(original));
       if (exists.ok) {
         if (whole)
@@ -2826,9 +2854,10 @@ async function sidecarOwner(path: string): Promise<{ conversationId: string; cwd
   if (!read.ok) return null;
   const parsed = parseJson(read.value, "task plan sidecar");
   if (!parsed.ok || !parsed.value || typeof parsed.value !== "object") return null;
-  const owner = path.endsWith(".workflow.json")
-    ? (parsed.value as { origin?: unknown }).origin
-    : (parsed.value as { owner?: unknown }).owner;
+  const owner =
+    path.endsWith(".workflow.json") || path.endsWith(".workflow-v1-backup.json")
+      ? (parsed.value as { origin?: unknown }).origin
+      : (parsed.value as { owner?: unknown }).owner;
   if (
     !owner ||
     typeof owner !== "object" ||
@@ -2936,7 +2965,20 @@ async function removeRepositoryLeftovers(
         continue;
       }
       if (known(name)) {
-        await unlinkKnown(join(canonical.value, name));
+        const file = join(canonical.value, name);
+        if (name.endsWith(".workflow-v1-backup.json")) {
+          const owner = await sidecarOwner(file);
+          const deleted = owner
+            ? await deleteWorkflowForPurge(file.slice(0, -".workflow-v1-backup.json".length), owner)
+            : err(new StorageError("Cannot verify ownership of workflow backup."));
+          if (!deleted.ok) {
+            left++;
+            residuals.push({ path: file, reason: deleted.error.message, code: deleted.error.code });
+          } else if (deleted.value === "retained") {
+            left++;
+            preserved.push({ path: file, reason: "Workflow retained by a live continuation." });
+          } else if (deleted.value === "removed") removed.push(file);
+        } else await unlinkKnown(file);
       } else {
         left++;
         residuals.push({ path: join(path, name), reason: "Unrecognised file in owned directory." });
@@ -2951,7 +2993,7 @@ async function removeRepositoryLeftovers(
 
   await emptyDirectory(snapshotDirectory(paths), (name) => snapshotFileName.test(name));
   for (const directory of ownedSdkDirectories(paths)) {
-    await emptyDirectory(directory, () => false);
+    await emptyDirectory(directory, (name) => name.endsWith(".jsonl.workflow-v1-backup.json"));
   }
   await unlinkKnown(paths.log);
 
